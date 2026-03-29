@@ -5,12 +5,11 @@ Pure functions operating on ParseResult / Task lists.
 
 from __future__ import annotations
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Optional
 
-import numpy as np
-
-from .models import Task, Session, fmt_dur
+from .models import Task, Session, GoalSpec, fmt_dur
 from .parser import ParseResult
 
 
@@ -180,3 +179,127 @@ class GoalTracker:
             return None
         daily_avg = self.daily_avg_hours(task_name)
         return t.days_to_goal(daily_avg)
+
+    def required_daily_hours(self, task_name: str) -> Optional[float]:
+        t = next((t for t in self.tasks if t.name == task_name), None)
+        if t is None:
+            return None
+        return t.required_daily_hours()
+
+    def is_on_pace(self, task_name: str) -> Optional[bool]:
+        req = self.required_daily_hours(task_name)
+        if req is None:
+            return None
+        avg = self.daily_avg_hours(task_name)
+        return avg >= req
+
+
+# ──────────────────────────────────────────────────────────
+# Streak
+# ──────────────────────────────────────────────────────────
+def streak_days(tasks: list[Task], end_date: Optional[date] = None) -> int:
+    """Consecutive days (ending at end_date) with any logged session."""
+    end_date = end_date or date.today()
+    logged = {s.date for t in tasks for s in t.sessions if not s.is_open}
+    streak, check = 0, end_date
+    while check in logged:
+        streak += 1
+        check -= timedelta(days=1)
+    return streak
+
+
+# ──────────────────────────────────────────────────────────
+# Insight engine
+# ──────────────────────────────────────────────────────────
+@dataclass
+class Insight:
+    icon:      str
+    label:     str
+    value:     str
+    sub:       str       = ""
+    sentiment: str       = "neutral"   # positive | neutral | warning | negative
+
+
+class InsightEngine:
+    """Computes a list of Insight objects from current stats + goals."""
+
+    def __init__(self, tasks: list[Task], stats: RangeStats,
+                 goals: Optional[dict[str, GoalSpec]] = None):
+        self._tasks  = tasks
+        self._stats  = stats
+        self._goals  = goals or {}
+
+    def compute(self) -> list[Insight]:
+        insights: list[Insight] = []
+
+        # 1 — Streak
+        s = streak_days(self._tasks)
+        if s > 0:
+            senti = "positive" if s >= 7 else "neutral"
+            insights.append(Insight("🔥", "Current streak",
+                                    f"{s} day{'s' if s != 1 else ''}",
+                                    "consecutive days logged", senti))
+
+        # 2 — Best single day in range
+        if self._stats.total_by_day:
+            best_d, best_s = max(self._stats.total_by_day.items(),
+                                 key=lambda kv: kv[1])
+            insights.append(Insight("📅", "Best day in range",
+                                    fmt_dur(best_s, short=True),
+                                    best_d.strftime("%a %d %b").replace(" 0", " ") if hasattr(best_d, 'strftime') else str(best_d),
+                                    "positive"))
+
+        # 3 — Week-over-week delta
+        try:
+            comp = WeeklyComparison(self._tasks)
+            delta = comp.total_delta()
+            tw    = comp.this_week.grand_total_seconds
+            senti = "positive" if delta > 0 else ("negative" if delta < -900 else "neutral")
+            sign  = "+" if delta >= 0 else "−"
+            insights.append(Insight(
+                "📈" if delta >= 0 else "📉",
+                "vs last week",
+                f"{sign}{fmt_dur(abs(delta), short=True)}",
+                f"this week: {fmt_dur(tw, short=True)}",
+                senti,
+            ))
+        except Exception:
+            pass
+
+        # 4 — Most productive hour
+        if self._stats.by_hour:
+            peak_h = max(self._stats.by_hour,
+                         key=lambda h: sum(self._stats.by_hour[h].values()))
+            peak_s = sum(self._stats.by_hour[peak_h].values())
+            insights.append(Insight("⏰", "Peak hour",
+                                    f"{peak_h:02d}:00–{peak_h+1:02d}:00",
+                                    fmt_dur(peak_s / max(1, self._stats.n_days),
+                                            short=True) + " avg/day",
+                                    "neutral"))
+
+        # 5 — Best weekday
+        wd = self._stats.most_consistent_weekday()
+        if wd is not None:
+            from ..ui.theme import WEEKDAY_NAMES  # late import avoids cycle
+            insights.append(Insight("📆", "Most active day",
+                                    WEEKDAY_NAMES[wd], "", "neutral"))
+
+        # 6 — Goal pace (first task with a deadline)
+        for t in self._tasks:
+            req = t.required_daily_hours()
+            if req is None:
+                continue
+            tracker = GoalTracker(self._tasks, self._stats)
+            avg     = tracker.daily_avg_hours(t.name)
+            senti   = "positive" if avg >= req else "warning"
+            days    = t.deadline_days_left()
+            sub     = f"{days}d left" if days is not None else ""
+            insights.append(Insight(
+                "🎯", f"{t.name} goal pace",
+                f"{req:.1f}h/day needed",
+                f"avg {avg:.1f}h/day · {sub}",
+                senti,
+            ))
+            break   # show only first task with deadline
+
+        return insights

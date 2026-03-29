@@ -1,67 +1,52 @@
 """
-ui/theme.py — All colour/font/spacing constants in one place.
+ui/theme.py — Design tokens.  Linear/Vercel-inspired dark palette.
+No matplotlib dependency.
 """
 
-# ── Dark palette ──────────────────────────────────────────
-BG         = "#1a1a1a"   # window background
-BG2        = "#242424"   # panel / card background
-BG3        = "#2e2e2e"   # input / row hover
-BORDER     = "#3a3a3a"   # subtle borders
-TEXT       = "#e0e0e0"   # primary text
-MUTED      = "#888888"   # secondary text
-FAINT      = "#555555"   # disabled / hints
-ACCENT     = "#378ADD"   # blue highlight
-ACCENT2    = "#185FA5"   # darker accent
-SUCCESS    = "#4CAF50"
-WARNING    = "#FF9900"
-DANGER     = "#E24B4A"
+# ── Surfaces ─────────────────────────────────────────────
+BG       = "#0d0d0d"   # window background
+BG2      = "#141414"   # card / panel surface
+BG3      = "#1c1c1c"   # elevated surface / hover
+BG4      = "#242424"   # control / input surface
 
-# ── Matplotlib colours (must be compatible with mpl) ─────
-MPL_BG     = "#1a1a1a"
-MPL_BG2    = "#242424"
-MPL_TEXT   = "#e0e0e0"
-MPL_MUTED  = "#666666"
-MPL_GRID   = "#2e2e2e"
+# ── Borders ──────────────────────────────────────────────
+BORDER   = "#2a2a2a"   # subtle  (most dividers)
+BORDER2  = "#3d3d3d"   # active / hover border
 
-# ── Typography ────────────────────────────────────────────
-FONT_FAMILY = "Segoe UI"   # falls back gracefully on Mac/Linux
-FONT_SM     = ("Segoe UI", 10)
-FONT_MD     = ("Segoe UI", 12)
-FONT_LG     = ("Segoe UI", 14)
-FONT_BOLD   = ("Segoe UI", 12, "bold")
-FONT_TITLE  = ("Segoe UI", 18, "bold")
+# ── Text ─────────────────────────────────────────────────
+TEXT     = "#ededed"   # primary
+MUTED    = "#737373"   # secondary labels
+FAINT    = "#383838"   # ghost / disabled
 
-# ── Spacing ───────────────────────────────────────────────
-PAD_SM = 4
-PAD_MD = 8
-PAD_LG = 16
+# ── Semantic ─────────────────────────────────────────────
+ACCENT      = "#5B8DEF"   # blue  (primary action)
+ACCENT_DIM  = "#1b3466"   # blue tint background
+SUCCESS     = "#3DD68C"   # green
+SUCCESS_DIM = "#0d3320"
+WARNING     = "#F0A429"   # amber
+WARNING_DIM = "#3d2600"
+DANGER      = "#F04343"   # red
+DANGER_DIM  = "#3d0a0a"
 
+# ── Spacing ──────────────────────────────────────────────
+PAD_XS = 4
+PAD_SM = 8
+PAD_MD = 14
+PAD_LG = 20
+PAD_XL = 28
+
+# backwards-compat aliases used in older code
+PAD_MD_OLD = PAD_SM   # was 8
+PAD_LG_OLD = PAD_MD   # was 14
+
+# ── Calendar ─────────────────────────────────────────────
 WEEKDAY_NAMES = ["Monday", "Tuesday", "Wednesday",
                  "Thursday", "Friday", "Saturday", "Sunday"]
 WEEKDAY_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
-
-def apply_matplotlib_theme() -> None:
-    """Set global matplotlib rcParams to match the dark UI."""
-    import matplotlib as mpl
-    mpl.rcParams.update({
-        "figure.facecolor":  MPL_BG,
-        "axes.facecolor":    MPL_BG2,
-        "axes.edgecolor":    MPL_GRID,
-        "axes.labelcolor":   MPL_MUTED,
-        "axes.titlecolor":   MPL_TEXT,
-        "axes.grid":         True,
-        "grid.color":        MPL_GRID,
-        "grid.linewidth":    0.6,
-        "xtick.color":       MPL_MUTED,
-        "ytick.color":       MPL_MUTED,
-        "xtick.labelsize":   9,
-        "ytick.labelsize":   9,
-        "legend.facecolor":  MPL_BG2,
-        "legend.edgecolor":  BORDER,
-        "legend.fontsize":   9,
-        "text.color":        MPL_TEXT,
-        "lines.linewidth":   1.5,
-        "patch.edgecolor":   "none",
-        "font.family":       "DejaVu Sans",
-    })
+# ── Chart fallback palette (when task has no colour) ─────
+CHART_PALETTE = [
+    "#5B8DEF", "#3DD68C", "#F0A429", "#F04343", "#AB7DF6",
+    "#38BDF8", "#FB7185", "#34D399", "#FBBF24", "#A78BFA",
+    "#60A5FA", "#F472B6",
+]

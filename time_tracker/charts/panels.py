@@ -1,356 +1,567 @@
 """
-charts/panels.py — Individual chart widgets, each self-contained.
-Each panel receives a RangeStats object and re-draws itself.
+charts/panels.py — All chart widgets rendered with QPainter.
+No matplotlib; everything is native Qt for performance and crisp scaling.
 """
 
 from __future__ import annotations
+import math
 from datetime import date, timedelta
 from typing import Optional
 
-import numpy as np
-from matplotlib.figure import Figure
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QSizePolicy
+from PyQt5.QtCore import Qt, QRect, QRectF, QPointF, QSizeF
+from PyQt5.QtGui import (
+    QColor, QPainter, QPen, QBrush, QFont, QFontMetrics,
+    QPainterPath, QLinearGradient,
+)
+from PyQt5.QtWidgets import QWidget, QSizePolicy
 
-from ..core.analytics import RangeStats, WeeklyComparison
+from ..core.analytics import RangeStats, WeeklyComparison, date_range
 from ..core.models import Task, fmt_dur
 from ..ui.theme import (
-    apply_matplotlib_theme, MPL_BG, MPL_BG2, MPL_TEXT,
-    MPL_MUTED, MPL_GRID, ACCENT, BORDER, WEEKDAY_SHORT,
+    BG2, BG3, BG4, BORDER, BORDER2,
+    TEXT, MUTED, FAINT, ACCENT, SUCCESS, WARNING, DANGER,
+    WEEKDAY_SHORT,
 )
 
 
-def _hex_to_rgba(hex_colour: str, alpha: float = 1.0):
-    """Convert '#rrggbb' to (r,g,b,a) floats."""
-    h = hex_colour.lstrip("#")
-    r, g, b = (int(h[i:i+2], 16) / 255 for i in (0, 2, 4))
-    return (r, g, b, alpha)
+# ──────────────────────────────────────────────────────────
+# Drawing helpers
+# ──────────────────────────────────────────────────────────
+
+def _font(size: int = 9, bold: bool = False) -> QFont:
+    f = QFont("Segoe UI", size)
+    f.setBold(bold)
+    f.setHintingPreference(QFont.PreferFullHinting)
+    return f
 
 
-class BaseChart(QWidget):
-    """Common base: holds a Figure + Canvas, provides clear/resize helpers."""
+def _nice_ticks(max_val: float, n: int = 5) -> list[float]:
+    if max_val <= 0:
+        return [0.0]
+    raw = max_val / n
+    mag = 10 ** math.floor(math.log10(raw)) if raw > 0 else 1
+    for ns in [0.1, 0.2, 0.25, 0.5, 1, 2, 2.5, 5, 10]:
+        if ns * mag >= raw:
+            step = ns * mag
+            break
+    else:
+        step = mag
+    ticks = []
+    v = 0.0
+    while v <= max_val * 1.05:
+        ticks.append(round(v, 8))
+        v += step
+    return ticks
 
-    def __init__(self, figsize=(6, 3), parent=None):
+
+def _smart_date_ticks(days: list[date],
+                      max_n: int = 8) -> list[tuple[int, str]]:
+    n = len(days)
+    if n == 0:
+        return []
+    if n <= max_n:
+        return [(i, days[i].strftime("%d %b")) for i in range(n)]
+    result, seen = [], set()
+    for i, d in enumerate(days):
+        label = None
+        if i == 0:
+            label = d.strftime("%d %b")
+        elif i == n - 1:
+            label = d.strftime("%d %b")
+        elif d.day == 1:
+            label = d.strftime("%b '%y")
+        if label is not None and i not in seen:
+            result.append((i, label))
+            seen.add(i)
+    return result
+
+
+# ──────────────────────────────────────────────────────────
+# Base chart widget
+# ──────────────────────────────────────────────────────────
+
+class NativeChart(QWidget):
+    """Base for all QPainter charts."""
+
+    _PAD = (20, 16, 48, 56)   # top, right, bottom, left
+
+    def __init__(self, fixed_height: int = 280, parent=None):
         super().__init__(parent)
-        apply_matplotlib_theme()
-        self.fig    = Figure(figsize=figsize, tight_layout=True)
-        self.canvas = FigureCanvas(self.fig)
-        self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self._stats: Optional[RangeStats] = None
+        self.setFixedHeight(fixed_height)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setAttribute(Qt.WA_OpaquePaintEvent)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self.canvas)
-
-    def _clear(self) -> None:
-        self.fig.clear()
-
-    def _draw(self) -> None:
-        self.canvas.draw_idle()
+    def _plot_rect(self) -> QRect:
+        pt, pr, pb, pl = self._PAD
+        return QRect(pl, pt, self.width() - pl - pr, self.height() - pt - pb)
 
     def refresh(self, stats: RangeStats) -> None:
+        self._stats = stats
+        self.update()
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.fillRect(self.rect(), QColor(BG2))
+        if self._stats is None:
+            self._draw_no_data(p)
+            return
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setRenderHint(QPainter.TextAntialiasing)
+        self._paint(p)
+        p.end()
+
+    def _paint(self, p: QPainter) -> None:
         raise NotImplementedError
 
+    def _draw_no_data(self, p: QPainter) -> None:
+        p.setPen(QColor(FAINT))
+        p.setFont(_font(10))
+        p.drawText(self.rect(), Qt.AlignCenter, "No data in range")
+
+    # ── Shared drawing utilities ─────────────────────────
+
+    def _draw_h_grid(self, p: QPainter, rect: QRect,
+                     ticks: list[float], max_val: float) -> None:
+        p.setPen(QPen(QColor(BORDER), 1, Qt.SolidLine))
+        for t in ticks:
+            if max_val <= 0:
+                break
+            y = rect.bottom() - t / max_val * rect.height()
+            p.drawLine(QPointF(rect.left(), y), QPointF(rect.right(), y))
+
+    def _draw_y_labels(self, p: QPainter, rect: QRect,
+                       ticks: list[float], max_val: float,
+                       unit: str = "h") -> None:
+        p.setFont(_font(9))
+        p.setPen(QColor(MUTED))
+        fm = QFontMetrics(_font(9))
+        for t in ticks:
+            if max_val <= 0:
+                break
+            y = rect.bottom() - t / max_val * rect.height()
+            lbl = f"{t:.1f}{unit}" if t != int(t) else f"{int(t)}{unit}"
+            tw = fm.horizontalAdvance(lbl)
+            p.drawText(QRectF(rect.left() - tw - 6, y - 9, tw, 18),
+                       Qt.AlignRight | Qt.AlignVCenter, lbl)
+
+    def _draw_x_date_labels(self, p: QPainter, rect: QRect,
+                             days: list[date]) -> None:
+        p.setFont(_font(9))
+        p.setPen(QColor(MUTED))
+        for idx, lbl in _smart_date_ticks(days):
+            x = rect.x() + idx / max(1, len(days) - 1) * rect.width()
+            p.drawText(QRectF(x - 28, rect.bottom() + 5, 56, 16),
+                       Qt.AlignCenter, lbl)
+
+    def _draw_axes(self, p: QPainter, rect: QRect) -> None:
+        p.setPen(QPen(QColor(BORDER2), 1))
+        p.drawLine(rect.bottomLeft(), rect.bottomRight())
+        p.drawLine(rect.topLeft(), rect.bottomLeft())
+
+    def _draw_legend(self, p: QPainter, tasks: list[Task],
+                     x0: int, y0: int, max_w: int,
+                     font_size: int = 9) -> None:
+        """Horizontal wrapping legend."""
+        f = _font(font_size)
+        p.setFont(f)
+        fm = QFontMetrics(f)
+        DOT, GAP_TEXT, GAP_ITEM, ITEM_H = 8, 4, 16, 18
+        x, y = x0, y0
+        for task in tasks:
+            name = task.name if len(task.name) <= 16 else task.name[:14] + "…"
+            item_w = DOT + GAP_TEXT + fm.horizontalAdvance(name) + GAP_ITEM
+            if x + item_w > x0 + max_w and x > x0:
+                x = x0
+                y += ITEM_H
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(task.colour))
+            p.drawRoundedRect(
+                QRectF(x, y + (ITEM_H - DOT) / 2, DOT, DOT), 2, 2)
+            p.setBrush(Qt.NoBrush)
+            p.setPen(QColor(MUTED))
+            p.drawText(QRectF(x + DOT + GAP_TEXT, y, item_w, ITEM_H),
+                       Qt.AlignVCenter, name)
+            x += item_w
+
 
 # ──────────────────────────────────────────────────────────
-# 1. Pie chart
+# 1. Stacked area — daily totals with task breakdown
 # ──────────────────────────────────────────────────────────
-class PieChart(BaseChart):
+
+class StackedAreaChart(NativeChart):
+    """Daily tracked time as stacked filled areas per task."""
+
+    _PAD = (20, 16, 56, 56)   # extra bottom for legend
+
     def __init__(self, parent=None):
-        super().__init__(figsize=(5, 3.5), parent=parent)
+        super().__init__(fixed_height=300, parent=parent)
 
-    def refresh(self, stats: RangeStats) -> None:
-        self._clear()
-        ax = self.fig.add_subplot(111)
-        active = stats.active_tasks
-        if not active:
-            ax.text(0.5, 0.5, "No data", ha="center", va="center",
-                    transform=ax.transAxes, color=MPL_MUTED)
-            self._draw()
+    def _paint(self, p: QPainter) -> None:
+        stats  = self._stats
+        days   = date_range(stats.start, stats.end)
+        active = sorted(stats.active_tasks,
+                        key=lambda t: stats.task_seconds.get(t.name, 0))
+        if not active or not days:
+            self._draw_no_data(p)
             return
 
-        sizes  = [stats.task_seconds[t.name] for t in active]
-        labels = [t.name for t in active]
-        colours = [_hex_to_rgba(t.colour) for t in active]
+        rect = self._plot_rect()
+        n    = len(days)
 
-        wedges, texts, autotexts = ax.pie(
-            sizes, labels=None, colors=colours,
-            autopct=lambda p: f"{p:.1f}%" if p > 3 else "",
-            startangle=90, pctdistance=0.75,
-            wedgeprops={"linewidth": 0.5, "edgecolor": MPL_BG},
-        )
-        for at in autotexts:
-            at.set_fontsize(8)
-            at.set_color(MPL_TEXT)
+        # Max total stack per day
+        day_totals = [
+            sum(stats.daily.get(d, {}).get(t.name, 0) / 3600 for t in active)
+            for d in days
+        ]
+        max_h = max(day_totals) if day_totals else 1.0
+        max_h = max(max_h, 0.01)
 
-        ax.legend(
-            wedges, [f"{l} ({fmt_dur(s, short=True)})"
-                     for l, s in zip(labels, sizes)],
-            loc="center left", bbox_to_anchor=(1, 0.5),
-            fontsize=8, framealpha=0.3,
-        )
-        ax.set_title("Time per task", fontsize=10, pad=6)
-        self._draw()
+        ticks = _nice_ticks(max_h)
+
+        def mx(i: int) -> float:
+            if n == 1:
+                return rect.x() + rect.width() / 2
+            return rect.x() + i / (n - 1) * rect.width()
+
+        def my(h: float) -> float:
+            return rect.bottom() - h / max_h * rect.height()
+
+        # Grid
+        self._draw_h_grid(p, rect, ticks, max_h)
+        self._draw_axes(p, rect)
+
+        # Stacked areas — paint smallest-first so largest covers gaps
+        cumul = [0.0] * n
+        for task in active:
+            top_pts: list[QPointF] = []
+            bot_pts: list[QPointF] = []
+            for i, d in enumerate(days):
+                h = stats.daily.get(d, {}).get(task.name, 0) / 3600
+                top_pts.append(QPointF(mx(i), my(cumul[i] + h)))
+                bot_pts.append(QPointF(mx(i), my(cumul[i])))
+                cumul[i] += h
+
+            # Fill polygon — fully opaque so lower bands aren't hidden
+            path = QPainterPath()
+            path.moveTo(top_pts[0])
+            for pt in top_pts[1:]:
+                path.lineTo(pt)
+            for pt in reversed(bot_pts):
+                path.lineTo(pt)
+            path.closeSubpath()
+            p.fillPath(path, QBrush(QColor(task.colour)))
+
+            # Thin dark separator line along the top edge for band visibility
+            sep = QColor(0, 0, 0, 80)
+            pen = QPen(sep, 1, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+            p.setPen(pen)
+            for i in range(1, len(top_pts)):
+                p.drawLine(top_pts[i - 1], top_pts[i])
+
+        # Axes labels
+        self._draw_y_labels(p, rect, ticks, max_h)
+        self._draw_x_date_labels(p, rect, days)
+
+        # Legend below x-axis
+        pt, pr, pb, pl = self._PAD
+        self._draw_legend(p, list(reversed(active)),
+                          pl, self.height() - pb + 24,
+                          self.width() - pl - pr)
 
 
 # ──────────────────────────────────────────────────────────
-# 2. Horizontal bar (task totals)
+# 2. Weekday pattern — avg hours per weekday, stacked
 # ──────────────────────────────────────────────────────────
-class TaskBarChart(BaseChart):
+
+class WeekdayBarChart(NativeChart):
+    _PAD = (20, 16, 36, 56)
+
     def __init__(self, parent=None):
-        super().__init__(figsize=(6, 3.5), parent=parent)
+        super().__init__(fixed_height=270, parent=parent)
 
-    def refresh(self, stats: RangeStats) -> None:
-        self._clear()
-        ax = self.fig.add_subplot(111)
-        active = stats.active_tasks
+    def _paint(self, p: QPainter) -> None:
+        stats  = self._stats
+        active = sorted(stats.active_tasks,
+                        key=lambda t: stats.task_seconds.get(t.name, 0))
         if not active:
-            ax.text(0.5, 0.5, "No data", ha="center", va="center",
-                    transform=ax.transAxes, color=MPL_MUTED)
-            self._draw()
+            self._draw_no_data(p)
             return
 
-        names   = [t.name for t in active]
-        seconds = [stats.task_seconds[n] for n in names]
-        colours = [t.colour for t in active]
+        rect  = self._plot_rect()
+        BAR_W = max(20, int(rect.width() / 7 * 0.55))
+        GAP   = rect.width() / 7
 
-        y = np.arange(len(names))
-        bars = ax.barh(y, seconds, color=colours, height=0.55)
-        ax.set_yticks(y)
-        ax.set_yticklabels(names, fontsize=9)
-        ax.xaxis.set_major_formatter(
-            plt_formatter(lambda v, _: f"{v/3600:.1f}h")
-        )
-        ax.set_xlabel("Hours", fontsize=9, color=MPL_MUTED)
-        ax.set_title("Time per task", fontsize=10, pad=6)
-        ax.invert_yaxis()
-        self._draw()
+        # Find max total height per weekday
+        wd_totals = [
+            sum(stats.avg_by_weekday.get(wd, {}).get(t.name, 0) / 3600
+                for t in active)
+            for wd in range(7)
+        ]
+        max_h  = max(wd_totals) if wd_totals else 1.0
+        max_h  = max(max_h, 0.01)
+        best   = wd_totals.index(max(wd_totals)) if wd_totals else -1
+        ticks  = _nice_ticks(max_h)
+
+        self._draw_h_grid(p, rect, ticks, max_h)
+        self._draw_axes(p, rect)
+
+        def bar_cx(wd: int) -> float:
+            return rect.x() + wd * GAP + GAP / 2
+
+        for wd in range(7):
+            cx = bar_cx(wd)
+            x0 = cx - BAR_W / 2
+            cumul_h = 0.0
+            for task in active:
+                h = stats.avg_by_weekday.get(wd, {}).get(task.name, 0) / 3600
+                if h <= 0:
+                    continue
+                bar_h = h / max_h * rect.height()
+                y0 = rect.bottom() - (cumul_h + h) / max_h * rect.height()
+                r = QRectF(x0, y0, BAR_W, bar_h)
+                p.setPen(Qt.NoPen)
+                p.setBrush(QColor(task.colour))
+                p.drawRoundedRect(r, 3, 3) if cumul_h == 0 else p.fillRect(r, QColor(task.colour))
+                cumul_h += h
+
+            # Best-day accent line
+            if wd == best and wd_totals[wd] > 0:
+                top_y = rect.bottom() - wd_totals[wd] / max_h * rect.height()
+                p.setPen(QPen(QColor(ACCENT), 2))
+                p.drawLine(QPointF(x0 - 2, top_y), QPointF(x0 + BAR_W + 2, top_y))
+
+            # Value above bar
+            if wd_totals[wd] > 0:
+                top_y = rect.bottom() - wd_totals[wd] / max_h * rect.height()
+                p.setFont(_font(8))
+                p.setPen(QColor(MUTED))
+                lbl = f"{wd_totals[wd]:.1f}h"
+                p.drawText(QRectF(cx - 18, top_y - 16, 36, 14),
+                           Qt.AlignCenter, lbl)
+
+        # Y labels
+        self._draw_y_labels(p, rect, ticks, max_h)
+
+        # X weekday labels
+        p.setFont(_font(9))
+        p.setPen(QColor(TEXT))
+        for wd in range(7):
+            cx = bar_cx(wd)
+            lbl = WEEKDAY_SHORT[wd]
+            if wd == best:
+                p.setPen(QColor(ACCENT))
+                p.setFont(_font(9, bold=True))
+            else:
+                p.setPen(QColor(MUTED))
+                p.setFont(_font(9))
+            p.drawText(QRectF(cx - 20, rect.bottom() + 4, 40, 16),
+                       Qt.AlignCenter, lbl)
 
 
 # ──────────────────────────────────────────────────────────
-# 3. Weekday stacked bar
+# 3. Hour heatmap — task × hour grid
 # ──────────────────────────────────────────────────────────
-class WeekdayChart(BaseChart):
+
+class HourHeatmap(NativeChart):
+    _PAD = (36, 12, 28, 0)   # top for hour labels, bottom for label
+
     def __init__(self, parent=None):
-        super().__init__(figsize=(6, 3.5), parent=parent)
+        super().__init__(fixed_height=200, parent=parent)
 
     def refresh(self, stats: RangeStats) -> None:
-        self._clear()
-        ax = self.fig.add_subplot(111)
+        self._stats = stats
+        n = len(stats.active_tasks)
+        self.setFixedHeight(max(160, self._PAD[0] + n * 30 + self._PAD[2]))
+        self.update()
+
+    def _paint(self, p: QPainter) -> None:
+        stats  = self._stats
         active = stats.active_tasks
         if not active:
-            ax.text(0.5, 0.5, "No data", ha="center", va="center",
-                    transform=ax.transAxes, color=MPL_MUTED)
-            self._draw()
+            self._draw_no_data(p)
             return
 
-        x      = np.arange(7)
-        bottom = np.zeros(7)
-        most_consistent = stats.most_consistent_weekday()
+        pt, pr, pb, pl = self._PAD
+        n_tasks  = len(active)
+        CELL_H   = 30
+        name_w   = 110   # width reserved for task names
 
-        for t in active:
-            vals = np.array([
-                stats.avg_by_weekday.get(wd, {}).get(t.name, 0) / 3600
-                for wd in range(7)
-            ])
-            ax.bar(x, vals, bottom=bottom, color=t.colour,
-                   label=t.name, width=0.65)
-            bottom += vals
+        chart_x  = pl + name_w + 8
+        chart_w  = self.width() - chart_x - pr
+        cell_w   = chart_w / 24
 
-        # Highlight most consistent weekday
-        if most_consistent is not None:
-            ax.axvline(most_consistent, color=ACCENT, linewidth=1.2,
-                       linestyle="--", alpha=0.7)
+        # Compute max hours across all cells for color scaling
+        all_vals = [stats.by_hour.get(h, {}).get(t.name, 0) / 3600
+                    for t in active for h in range(24)]
+        max_v    = max(all_vals) if all_vals else 1.0
+        max_v    = max(max_v, 0.01)
 
-        ax.set_xticks(x)
-        ax.set_xticklabels(WEEKDAY_SHORT, fontsize=9)
-        ax.set_ylabel("Avg hours / day", fontsize=9, color=MPL_MUTED)
-        ax.set_title("Average time by weekday", fontsize=10, pad=6)
-        self._draw()
+        # Hour column headers
+        p.setFont(_font(8))
+        p.setPen(QColor(MUTED))
+        for h in range(0, 24, 2):
+            cx = chart_x + (h + 0.5) * cell_w
+            p.drawText(QRectF(cx - 12, 4, 24, 18),
+                       Qt.AlignCenter, f"{h:02d}")
 
+        for row, task in enumerate(active):
+            y0 = pt + row * CELL_H
 
-# ──────────────────────────────────────────────────────────
-# 4. Daily line chart
-# ──────────────────────────────────────────────────────────
-class DailyLineChart(BaseChart):
-    def __init__(self, parent=None):
-        super().__init__(figsize=(8, 3), parent=parent)
+            # Task name
+            p.setFont(_font(9))
+            p.setPen(QColor(TEXT))
+            name = task.name if len(task.name) <= 14 else task.name[:13] + "…"
+            # Colored dot
+            p.setBrush(QColor(task.colour))
+            p.setPen(Qt.NoPen)
+            p.drawEllipse(QRectF(pl, y0 + (CELL_H - 8) / 2, 8, 8))
+            p.setPen(QColor(TEXT))
+            p.drawText(QRectF(pl + 12, y0, name_w - 12, CELL_H),
+                       Qt.AlignVCenter, name)
 
-    def refresh(self, stats: RangeStats) -> None:
-        import matplotlib.dates as mdates
-        self._clear()
-        ax = self.fig.add_subplot(111)
-        active = stats.active_tasks
-        if not active:
-            ax.text(0.5, 0.5, "No data", ha="center", va="center",
-                    transform=ax.transAxes, color=MPL_MUTED)
-            self._draw()
-            return
-
-        from ..core.analytics import date_range
-        days = date_range(stats.start, stats.end)
-        import datetime
-        xs = [datetime.datetime.combine(d, datetime.time()) for d in days]
-
-        for t in active:
-            ys = [stats.daily.get(d, {}).get(t.name, 0) / 60
-                  for d in days]
-            ax.plot(xs, ys, color=t.colour, linewidth=1.4,
-                    label=t.name, alpha=0.9)
-            ax.fill_between(xs, ys, alpha=0.08, color=t.colour)
-
-        # Smart x-axis ticks: first, last, first of each month
-        ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %d"))
-        self._set_smart_ticks(ax, days, xs)
-
-        ax.set_ylabel("Minutes", fontsize=9, color=MPL_MUTED)
-        ax.set_title("Daily time per task", fontsize=10, pad=6)
-        ax.margins(x=0.01)
-        self._draw()
-
-    @staticmethod
-    def _set_smart_ticks(ax, days, xs):
-        import matplotlib.dates as mdates
-        tick_xs, tick_labels = [], []
-        seen_months = set()
-        for i, (d, x) in enumerate(zip(days, xs)):
-            is_first = i == 0
-            is_last  = i == len(days) - 1
-            is_month = d.day == 1
-            if is_first or is_last or is_month:
-                if is_month and not is_first:
-                    lbl = d.strftime("%b '%y")
-                else:
-                    lbl = d.strftime("%d/%m")
-                tick_xs.append(x)
-                tick_labels.append(lbl)
-        ax.set_xticks(tick_xs)
-        ax.set_xticklabels(tick_labels, fontsize=8, rotation=30, ha="right")
-
-
-# ──────────────────────────────────────────────────────────
-# 5. Total daily line (dual axis)
-# ──────────────────────────────────────────────────────────
-class TotalDailyChart(BaseChart):
-    def __init__(self, parent=None):
-        super().__init__(figsize=(8, 2.6), parent=parent)
-
-    def refresh(self, stats: RangeStats) -> None:
-        import datetime
-        self._clear()
-        ax = self.fig.add_subplot(111)
-
-        from ..core.analytics import date_range
-        days = date_range(stats.start, stats.end)
-        xs   = [datetime.datetime.combine(d, datetime.time()) for d in days]
-        ys   = [stats.total_by_day.get(d, 0) / 60 for d in days]
-
-        ax.plot(xs, ys, color=ACCENT, linewidth=2)
-        ax.fill_between(xs, ys, alpha=0.12, color=ACCENT)
-
-        ax2 = ax.twinx()
-        ax2.set_ylim(ax.get_ylim()[0] / 60, ax.get_ylim()[1] / 60)
-        ax2.yaxis.set_major_formatter(
-            plt_formatter(lambda v, _: f"{v:.1f}h")
-        )
-        ax2.tick_params(labelsize=8, colors=MPL_MUTED)
-        ax2.set_facecolor("none")
-
-        DailyLineChart._set_smart_ticks(ax, days, xs)
-        ax.set_ylabel("Minutes", fontsize=9, color=MPL_MUTED)
-        ax.set_title("Total daily time", fontsize=10, pad=6)
-        ax.margins(x=0.01)
-        self._draw()
-
-
-# ──────────────────────────────────────────────────────────
-# 6. Hour-of-day heatmap
-# ──────────────────────────────────────────────────────────
-class HourHeatmap(BaseChart):
-    def __init__(self, parent=None):
-        super().__init__(figsize=(8, 3.2), parent=parent)
-
-    def refresh(self, stats: RangeStats) -> None:
-        self._clear()
-        active = stats.active_tasks
-        if not active:
-            ax = self.fig.add_subplot(111)
-            ax.text(0.5, 0.5, "No data", ha="center", va="center",
-                    transform=ax.transAxes, color=MPL_MUTED)
-            self._draw()
-            return
-
-        n_tasks = len(active)
-        ax = self.fig.add_subplot(111)
-
-        data = np.zeros((n_tasks, 24))
-        for i, t in enumerate(active):
             for h in range(24):
-                data[i, h] = stats.by_hour.get(h, {}).get(t.name, 0) / 3600
+                val    = stats.by_hour.get(h, {}).get(task.name, 0) / 3600
+                ratio  = val / max_v if max_v > 0 else 0
 
-        im = ax.imshow(
-            data, aspect="auto", cmap="Blues",
-            extent=[-0.5, 23.5, n_tasks - 0.5, -0.5],
-            vmin=0,
-        )
-        ax.set_yticks(range(n_tasks))
-        ax.set_yticklabels([t.name for t in active], fontsize=8)
-        ax.set_xticks(range(0, 24, 2))
-        ax.set_xticklabels(
-            [f"{h:02d}:00" for h in range(0, 24, 2)],
-            fontsize=7, rotation=45, ha="right"
-        )
-        self.fig.colorbar(im, ax=ax, label="Hours", shrink=0.8)
-        ax.set_title("Time-of-day heatmap", fontsize=10, pad=6)
-        self._draw()
+                # Color: blend from BG3 → task colour
+                base = QColor(BG3)
+                tc   = QColor(task.colour)
+                r = int(base.red()   + ratio * (tc.red()   - base.red()))
+                g = int(base.green() + ratio * (tc.green() - base.green()))
+                b = int(base.blue()  + ratio * (tc.blue()  - base.blue()))
+
+                cx   = chart_x + h * cell_w
+                cell = QRectF(cx + 1, y0 + 2, cell_w - 2, CELL_H - 4)
+                p.setBrush(QColor(r, g, b))
+                p.setPen(Qt.NoPen)
+                p.drawRoundedRect(cell, 2, 2)
+
+                # Value text if cell wide enough and value > 0
+                if cell_w > 22 and val >= 0.1:
+                    p.setFont(_font(7))
+                    p.setPen(QColor(255, 255, 255, 180))
+                    p.drawText(cell, Qt.AlignCenter, f"{val:.1f}")
 
 
 # ──────────────────────────────────────────────────────────
-# 7. Weekly comparison bar
+# 4. Weekly comparison — horizontal grouped bars
 # ──────────────────────────────────────────────────────────
-class WeeklyComparisonChart(BaseChart):
+
+class WeeklyCompChart(NativeChart):
+    _PAD = (8, 80, 12, 0)   # right: delta labels, left: task names drawn manually
+
     def __init__(self, parent=None):
-        super().__init__(figsize=(7, 3), parent=parent)
+        super().__init__(fixed_height=200, parent=parent)
 
     def refresh_comparison(self, comp: WeeklyComparison) -> None:
-        self._clear()
-        ax = self.fig.add_subplot(111)
+        self._comp = comp
+        all_tasks  = {t.name: t
+                      for t in comp.this_week.active_tasks
+                               + comp.last_week.active_tasks}
+        n = max(len(all_tasks), 1)
+        self.setFixedHeight(max(140, 24 + n * 36 + 16))
+        self.update()
 
-        tasks_tw = comp.this_week.active_tasks
-        tasks_lw = comp.last_week.active_tasks
-        all_tasks = {t.name: t for t in tasks_tw + tasks_lw}
+    def refresh(self, stats: RangeStats) -> None:
+        pass   # driven by refresh_comparison
 
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.fillRect(self.rect(), QColor(BG2))
+        if not hasattr(self, "_comp"):
+            self._draw_no_data(p)
+            p.end()
+            return
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setRenderHint(QPainter.TextAntialiasing)
+        self._paint_comp(p)
+        p.end()
+
+    def _paint(self, p: QPainter) -> None:
+        pass
+
+    def _paint_comp(self, p: QPainter) -> None:
+        comp = self._comp
+        all_tasks = {t.name: t
+                     for t in comp.this_week.active_tasks
+                              + comp.last_week.active_tasks}
         if not all_tasks:
-            ax.text(0.5, 0.5, "No data", ha="center", va="center",
-                    transform=ax.transAxes, color=MPL_MUTED)
-            self._draw()
+            self._draw_no_data(p)
             return
 
-        names = list(all_tasks.keys())
-        x     = np.arange(len(names))
-        w     = 0.35
+        names   = list(all_tasks.keys())
+        name_w  = 110
+        bar_area_x = name_w + 8
+        bar_area_w = self.width() - bar_area_x - self._PAD[1]
+        ROW_H = 36
+        BAR_H = 11
+        PAD_T = 8
 
         tw_vals = [comp.this_week.task_seconds.get(n, 0) / 3600 for n in names]
         lw_vals = [comp.last_week.task_seconds.get(n, 0) / 3600 for n in names]
-        colours = [all_tasks[n].colour for n in names]
+        max_v   = max(max(tw_vals), max(lw_vals), 0.01)
 
-        ax.bar(x - w/2, lw_vals, w, color=colours, alpha=0.45, label="Last week")
-        ax.bar(x + w/2, tw_vals, w, color=colours, alpha=0.9,  label="This week")
+        for i, name in enumerate(names):
+            task = all_tasks[name]
+            y0   = PAD_T + i * ROW_H
 
-        ax.set_xticks(x)
-        ax.set_xticklabels(names, rotation=30, ha="right", fontsize=8)
-        ax.set_ylabel("Hours", fontsize=9, color=MPL_MUTED)
-        ax.set_title("This week vs last week", fontsize=10, pad=6)
-        ax.legend(fontsize=8)
-        self._draw()
+            # Task name + dot
+            p.setBrush(QColor(task.colour))
+            p.setPen(Qt.NoPen)
+            p.drawEllipse(QRectF(6, y0 + (ROW_H - 8) / 2, 8, 8))
+            p.setFont(_font(9))
+            p.setPen(QColor(TEXT))
+            disp = name if len(name) <= 13 else name[:12] + "…"
+            p.drawText(QRectF(18, y0, name_w - 18, ROW_H),
+                       Qt.AlignVCenter, disp)
 
-    def refresh(self, stats: RangeStats) -> None:
-        pass  # driven by refresh_comparison
+            tw = tw_vals[i]
+            lw = lw_vals[i]
 
+            # Last week bar (dim)
+            lw_px = lw / max_v * bar_area_w
+            lw_r  = QRectF(bar_area_x, y0 + ROW_H / 2 - BAR_H - 1,
+                           lw_px, BAR_H)
+            c = QColor(task.colour)
+            c.setAlpha(70)
+            p.setBrush(c)
+            p.setPen(Qt.NoPen)
+            if lw_px > 0:
+                p.drawRoundedRect(lw_r, 2, 2)
 
-# ──────────────────────────────────────────────────────────
-# Matplotlib ticker helper (avoids import in every class)
-# ──────────────────────────────────────────────────────────
-import matplotlib.ticker as mticker
+            # This week bar (solid)
+            tw_px = tw / max_v * bar_area_w
+            tw_r  = QRectF(bar_area_x, y0 + ROW_H / 2 + 1,
+                           tw_px, BAR_H)
+            c2 = QColor(task.colour)
+            c2.setAlpha(220)
+            p.setBrush(c2)
+            if tw_px > 0:
+                p.drawRoundedRect(tw_r, 2, 2)
 
-def plt_formatter(fn):
-    return mticker.FuncFormatter(fn)
+            # Delta label on the right
+            delta  = tw - lw
+            d_sign = "+" if delta >= 0 else "−"
+            d_col  = SUCCESS if delta > 0 else (DANGER if delta < -0.05 else MUTED)
+            d_txt  = f"{d_sign}{fmt_dur(abs(delta) * 3600, short=True)}"
+            p.setFont(_font(9, bold=True))
+            p.setPen(QColor(d_col))
+            p.drawText(
+                QRectF(bar_area_x + bar_area_w + 6, y0, 70, ROW_H),
+                Qt.AlignVCenter, d_txt,
+            )
+
+        # Legend (top-right corner)
+        p.setFont(_font(8))
+        legend_x = self.width() - 76
+        for col, (lbl, alpha) in enumerate([("Last wk", 70), ("This wk", 220)]):
+            lx = legend_x
+            ly = 4 + col * 14
+            c = QColor(MUTED)
+            c.setAlpha(alpha)
+            p.setBrush(c)
+            p.setPen(Qt.NoPen)
+            p.drawRoundedRect(QRectF(lx, ly + 3, 24, 8), 2, 2)
+            p.setPen(QColor(MUTED))
+            p.drawText(QRectF(lx + 28, ly, 48, 14), Qt.AlignVCenter, lbl)

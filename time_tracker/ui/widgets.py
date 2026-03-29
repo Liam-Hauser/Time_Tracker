@@ -1,41 +1,50 @@
 """
-ui/widgets.py — Reusable PyQt5 widget components.
+ui/widgets.py — Reusable PyQt5 components for the Time Tracker UI.
 """
 
 from __future__ import annotations
-from typing import Callable, Optional
+from typing import Optional
 
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QSize
-from PyQt5.QtGui import QColor, QPainter, QFont, QPen, QBrush, QFontMetrics
+from PyQt5.QtCore import Qt, pyqtSignal, QRectF
+from PyQt5.QtGui import QColor, QPainter, QPen, QFont, QFontMetrics
 from PyQt5.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton,
-    QFrame, QSizePolicy, QSlider, QApplication, QScrollArea,
-    QToolButton, QSplitter,
+    QFrame, QSizePolicy, QScrollArea,
 )
 
 from .theme import (
-    BG, BG2, BG3, BORDER, TEXT, MUTED, FAINT,
-    ACCENT, SUCCESS, WARNING, DANGER,
-    FONT_SM, FONT_MD, FONT_BOLD, FONT_LG, PAD_SM, PAD_MD, PAD_LG,
+    BG, BG2, BG3, BG4, BORDER, BORDER2,
+    TEXT, MUTED, FAINT, ACCENT, ACCENT_DIM,
+    SUCCESS, SUCCESS_DIM, WARNING, WARNING_DIM, DANGER, DANGER_DIM,
+    PAD_XS, PAD_SM, PAD_MD, PAD_LG,
 )
 
 
 # ──────────────────────────────────────────────────────────
-# Helpers
+# Primitive helpers
 # ──────────────────────────────────────────────────────────
+
 def h_line() -> QFrame:
     f = QFrame()
     f.setFrameShape(QFrame.HLine)
-    f.setStyleSheet(f"color: {BORDER};")
+    f.setStyleSheet(f"color: {BORDER}; max-height: 1px; background: {BORDER};")
+    return f
+
+
+def v_line() -> QFrame:
+    f = QFrame()
+    f.setFrameShape(QFrame.VLine)
+    f.setStyleSheet(f"color: {BORDER}; max-width: 1px; background: {BORDER};")
     return f
 
 
 def label(text: str, colour: str = TEXT, bold: bool = False,
           size: int = 11) -> QLabel:
     lbl = QLabel(text)
-    w = "600" if bold else "400"
+    w   = "600" if bold else "400"
     lbl.setStyleSheet(
         f"color: {colour}; font-size: {size}px; font-weight: {w};"
+        f" background: transparent; border: none;"
     )
     return lbl
 
@@ -50,188 +59,275 @@ def card_frame(parent=None) -> QFrame:
 
 
 # ──────────────────────────────────────────────────────────
-# Stat card
+# Metric card  (top of right panel, 4 across)
 # ──────────────────────────────────────────────────────────
-class StatCard(QFrame):
-    def __init__(self, title: str, value: str = "—",
-                 sub: str = "", colour: str = TEXT, parent=None):
+
+class MetricCard(QFrame):
+    def __init__(self, title: str, parent=None):
         super().__init__(parent)
         self.setStyleSheet(
             f"QFrame {{ background: {BG2}; border-radius: 8px;"
             f" border: 1px solid {BORDER}; }}"
         )
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 10, 12, 10)
-        layout.setSpacing(2)
+        self.setMinimumHeight(80)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(14, 12, 14, 12)
+        lay.setSpacing(2)
 
-        self._title_lbl = label(title, MUTED, size=10)
-        self._value_lbl = label(value, colour, bold=True, size=20)
-        self._sub_lbl   = label(sub,   FAINT, size=10)
+        self._title = label(title, MUTED, size=10)
+        self._value = label("—", TEXT, bold=True, size=24)
+        self._sub   = label("", FAINT, size=10)
 
-        layout.addWidget(self._title_lbl)
-        layout.addWidget(self._value_lbl)
-        layout.addWidget(self._sub_lbl)
+        lay.addWidget(self._title)
+        lay.addWidget(self._value)
+        lay.addWidget(self._sub)
+        lay.addStretch()
 
     def update_value(self, value: str, sub: str = "",
                      colour: str = TEXT) -> None:
-        self._value_lbl.setText(value)
-        self._value_lbl.setStyleSheet(
-            f"color: {colour}; font-size: 20px; font-weight: 600;"
+        self._value.setText(value)
+        self._value.setStyleSheet(
+            f"color: {colour}; font-size: 24px; font-weight: 600;"
+            f" background: transparent; border: none;"
         )
-        self._sub_lbl.setText(sub)
+        self._sub.setText(sub)
 
 
 # ──────────────────────────────────────────────────────────
-# Collapsible section
+# Insight strip  (row of small insight cards)
 # ──────────────────────────────────────────────────────────
-class CollapsibleSection(QWidget):
-    """A titled section that can be collapsed/expanded with a toggle button."""
 
-    def __init__(self, title: str, compact: bool = False, parent=None):
+_SENTIMENT_COLORS = {
+    "positive": (SUCCESS, SUCCESS_DIM),
+    "warning":  (WARNING, WARNING_DIM),
+    "negative": (DANGER,  DANGER_DIM),
+    "neutral":  (MUTED,   BG3),
+}
+
+
+class InsightCard(QFrame):
+    def __init__(self, icon: str, label_txt: str, value: str,
+                 sub: str, sentiment: str, parent=None):
         super().__init__(parent)
-        self._expanded = True
-        self._compact  = compact
+        fg, bg = _SENTIMENT_COLORS.get(sentiment, (MUTED, BG3))
+        self.setStyleSheet(
+            f"QFrame {{ background: {bg}; border-radius: 8px;"
+            f" border: 1px solid {BORDER}; }}"
+        )
+        self.setFixedHeight(72)
+        self.setMinimumWidth(150)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(12, 8, 12, 8)
+        lay.setSpacing(1)
+
+        top = QHBoxLayout()
+        top.setSpacing(5)
+        top.addWidget(label(icon, fg, size=13))
+        top.addWidget(label(label_txt, MUTED, size=10))
+        top.addStretch()
+        lay.addLayout(top)
+
+        lay.addWidget(label(value, fg, bold=True, size=16))
+        if sub:
+            lay.addWidget(label(sub, MUTED, size=9))
+
+
+class InsightStrip(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._lay = QHBoxLayout(self)
+        self._lay.setContentsMargins(0, 0, 0, 0)
+        self._lay.setSpacing(PAD_SM)
+        self._lay.addStretch()
+
+    def refresh(self, insights) -> None:
+        # Clear existing cards
+        while self._lay.count() > 1:
+            item = self._lay.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        for ins in insights:
+            card = InsightCard(ins.icon, ins.label, ins.value,
+                               ins.sub, ins.sentiment)
+            self._lay.insertWidget(self._lay.count() - 1, card)
+
+        self.setVisible(len(insights) > 0)
+
+
+# ──────────────────────────────────────────────────────────
+# Chart panel  (titled container for QPainter charts)
+# ──────────────────────────────────────────────────────────
+
+class ChartPanel(QWidget):
+    def __init__(self, title: str, parent=None):
+        super().__init__(parent)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        # Header bar
         header = QFrame()
+        header.setFixedHeight(30)
+        header.setStyleSheet(
+            f"QFrame {{ background: {BG3};"
+            f" border-top-left-radius: 8px; border-top-right-radius: 8px;"
+            f" border: 1px solid {BORDER}; border-bottom: none; }}"
+        )
+        hl = QHBoxLayout(header)
+        hl.setContentsMargins(12, 0, 12, 0)
+        hl.addWidget(label(title, MUTED, size=10))
+        hl.addStretch()
+        outer.addWidget(header)
+
+        self._content = QFrame()
+        self._content.setStyleSheet(
+            f"QFrame {{ background: {BG2};"
+            f" border-bottom-left-radius: 8px; border-bottom-right-radius: 8px;"
+            f" border: 1px solid {BORDER}; border-top: none; }}"
+        )
+        cl = QVBoxLayout(self._content)
+        cl.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(self._content)
+        self._cl = cl
+
+    def add_widget(self, w: QWidget) -> None:
+        self._cl.addWidget(w)
+        # Mirror the chart's fixed height into the panel
+        w.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+
+# ──────────────────────────────────────────────────────────
+# Collapsible section  (left panel goals)
+# ──────────────────────────────────────────────────────────
+
+class CollapsibleSection(QWidget):
+    def __init__(self, title: str, parent=None):
+        super().__init__(parent)
+        self._expanded = True
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(3)
+
+        header = QFrame()
+        header.setCursor(Qt.PointingHandCursor)
+        header.setFixedHeight(32)
         header.setStyleSheet(
             f"QFrame {{ background: {BG3}; border-radius: 6px;"
             f" border: 1px solid {BORDER}; }}"
         )
-        h_layout = QHBoxLayout(header)
-        pad = PAD_SM if compact else PAD_MD
-        h_layout.setContentsMargins(pad, pad, pad, pad)
+        hl = QHBoxLayout(header)
+        hl.setContentsMargins(10, 0, 10, 0)
+        hl.setSpacing(8)
 
-        self._toggle = QToolButton()
-        self._toggle.setArrowType(Qt.DownArrow)
-        self._toggle.setStyleSheet(
-            f"QToolButton {{ background: transparent; border: none;"
-            f" color: {MUTED}; }}"
-        )
-        self._toggle.clicked.connect(self._on_toggle)
-
-        title_lbl = label(title, TEXT, bold=True, size=11)
-        h_layout.addWidget(self._toggle)
-        h_layout.addWidget(title_lbl)
-        h_layout.addStretch()
+        self._arrow = label("▾", MUTED, size=10)
+        self._arrow.setFixedWidth(12)
+        hl.addWidget(self._arrow)
+        hl.addWidget(label(title, TEXT, bold=True, size=10))
+        hl.addStretch()
+        header.mousePressEvent = lambda _: self._toggle()
         outer.addWidget(header)
 
-        # Content container
-        self._content = QWidget()
-        content_layout = QVBoxLayout(self._content)
-        content_layout.setContentsMargins(0, PAD_SM, 0, 0)
-        content_layout.setSpacing(0)
+        self._content = QFrame()
+        self._content.setStyleSheet(
+            f"QFrame {{ background: {BG2}; border-radius: 6px;"
+            f" border: 1px solid {BORDER}; }}"
+        )
+        cl = QVBoxLayout(self._content)
+        cl.setContentsMargins(PAD_SM, PAD_SM, PAD_SM, PAD_SM)
+        cl.setSpacing(4)
         outer.addWidget(self._content)
-        self._content_layout = content_layout
+        self._cl = cl
 
     def add_widget(self, w: QWidget) -> None:
-        self._content_layout.addWidget(w)
+        self._cl.addWidget(w)
 
-    def _on_toggle(self) -> None:
+    def _toggle(self) -> None:
         self._expanded = not self._expanded
         self._content.setVisible(self._expanded)
-        self._toggle.setArrowType(
-            Qt.DownArrow if self._expanded else Qt.RightArrow
-        )
+        self._arrow.setText("▾" if self._expanded else "▸")
 
 
 # ──────────────────────────────────────────────────────────
 # Dual-handle range slider
 # ──────────────────────────────────────────────────────────
+
 class RangeSlider(QWidget):
-    """
-    A single-track slider with two draggable handles (low, high).
-    Emits range_changed(low_index, high_index) on every change.
-    """
-
     range_changed = pyqtSignal(int, int)
-
-    HANDLE_R = 8   # radius in px
+    HANDLE_R = 8
     TRACK_H  = 4
 
     def __init__(self, count: int = 100, parent=None):
         super().__init__(parent)
         self.setMinimumHeight(32)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-
         self._count    = max(2, count)
         self._low      = 0
         self._high     = self._count - 1
-        self._dragging: Optional[str] = None  # "low" | "high"
+        self._dragging: Optional[str] = None
 
-    # ── Public API ───────────────────────────────────────
     def set_count(self, n: int) -> None:
         self._count = max(2, n)
-        self._low   = 0
-        self._high  = self._count - 1
+        self._low, self._high = 0, self._count - 1
         self.update()
 
     def set_range(self, low: int, high: int) -> None:
-        self._low  = max(0, min(low, self._count - 1))
+        self._low  = max(0, min(low,  self._count - 1))
         self._high = max(self._low, min(high, self._count - 1))
         self.update()
 
     @property
-    def low(self) -> int:  return self._low
+    def low(self)  -> int: return self._low
     @property
     def high(self) -> int: return self._high
 
-    # ── Geometry helpers ─────────────────────────────────
-    def _track_rect(self):
+    def _track(self):
         r = self.HANDLE_R
         return (r, self.height() // 2 - self.TRACK_H // 2,
                 self.width() - 2 * r, self.TRACK_H)
 
-    def _idx_to_x(self, idx: int) -> int:
-        tx, _, tw, _ = self._track_rect()
-        return tx + int(idx / (self._count - 1) * tw)
+    def _to_x(self, idx: int) -> int:
+        tx, _, tw, _ = self._track()
+        return tx + int(idx / max(1, self._count - 1) * tw)
 
-    def _x_to_idx(self, x: int) -> int:
-        tx, _, tw, _ = self._track_rect()
+    def _to_idx(self, x: int) -> int:
+        tx, _, tw, _ = self._track()
         pct = (x - tx) / max(1, tw)
         return max(0, min(self._count - 1, round(pct * (self._count - 1))))
 
-    # ── Paint ─────────────────────────────────────────────
     def paintEvent(self, _):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        tx, ty, tw, th = self._track_rect()
+        tx, ty, tw, th = self._track()
         cy = self.height() // 2
+        r  = self.HANDLE_R
 
-        # track background
         p.setPen(Qt.NoPen)
-        p.setBrush(QColor(BORDER))
+        p.setBrush(QColor(BG4))
         p.drawRoundedRect(tx, ty, tw, th, 2, 2)
 
-        # active fill
-        lx = self._idx_to_x(self._low)
-        hx = self._idx_to_x(self._high)
+        lx, hx = self._to_x(self._low), self._to_x(self._high)
         p.setBrush(QColor(ACCENT))
         p.drawRoundedRect(lx, ty, hx - lx, th, 2, 2)
 
-        # handles
         p.setPen(QPen(QColor(BG), 2))
         p.setBrush(QColor(ACCENT))
-        r = self.HANDLE_R
         for x in (lx, hx):
             p.drawEllipse(x - r, cy - r, 2 * r, 2 * r)
+        p.end()
 
-    # ── Mouse ─────────────────────────────────────────────
     def mousePressEvent(self, e):
-        lx = self._idx_to_x(self._low)
-        hx = self._idx_to_x(self._high)
-        r  = self.HANDLE_R + 4
+        lx, hx = self._to_x(self._low), self._to_x(self._high)
+        r = self.HANDLE_R + 4
         if abs(e.x() - lx) <= r:
             self._dragging = "low"
         elif abs(e.x() - hx) <= r:
             self._dragging = "high"
         else:
-            # snap nearest handle
-            idx = self._x_to_idx(e.x())
+            idx = self._to_idx(e.x())
             if abs(idx - self._low) <= abs(idx - self._high):
                 self._low = max(0, min(idx, self._high))
             else:
@@ -240,9 +336,9 @@ class RangeSlider(QWidget):
             self.range_changed.emit(self._low, self._high)
 
     def mouseMoveEvent(self, e):
-        if self._dragging is None:
+        if not self._dragging:
             return
-        idx = self._x_to_idx(e.x())
+        idx = self._to_idx(e.x())
         if self._dragging == "low":
             self._low = max(0, min(idx, self._high))
         else:
@@ -255,99 +351,164 @@ class RangeSlider(QWidget):
 
 
 # ──────────────────────────────────────────────────────────
-# Colour dot + label row
+# Quick preset buttons
 # ──────────────────────────────────────────────────────────
-class TaskRow(QWidget):
-    """Single task row: dot | name | bar | duration | sessions | clock btn."""
 
+class PresetBar(QWidget):
+    preset_selected = pyqtSignal(str)
+    PRESETS = ["7d", "30d", "Month", "Last mo.", "Week", "Last wk", "All"]
+    PRESET_KEYS = ["Last 7d", "Last 30d", "This month", "Last month",
+                   "This week", "Last week", "All"]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(PAD_XS)
+        for display, key in zip(self.PRESETS, self.PRESET_KEYS):
+            btn = QPushButton(display)
+            btn.setFixedHeight(24)
+            btn.setStyleSheet(
+                f"QPushButton {{ background: transparent; color: {MUTED};"
+                f" border: 1px solid {BORDER}; border-radius: 5px;"
+                f" font-size: 10px; padding: 0 8px; }}"
+                f" QPushButton:hover {{ color: {TEXT}; border-color: {BORDER2};"
+                f" background: {BG3}; }}"
+            )
+            btn.clicked.connect(
+                lambda _, k=key: self.preset_selected.emit(k)
+            )
+            lay.addWidget(btn)
+        lay.addStretch()
+
+
+# ──────────────────────────────────────────────────────────
+# Mini progress bar (used in task rows + goal rows)
+# ──────────────────────────────────────────────────────────
+
+class _MiniBar(QWidget):
+    def __init__(self, value: float = 0, maximum: float = 1,
+                 colour: str = ACCENT, parent=None):
+        super().__init__(parent)
+        self._value   = value
+        self._maximum = max(1.0, maximum)
+        self._colour  = colour
+        self.setFixedHeight(5)
+
+    def set(self, value: float, maximum: float, colour: str = "") -> None:
+        self._value   = value
+        self._maximum = max(1.0, maximum)
+        if colour:
+            self._colour = colour
+        self.update()
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        w, h = self.width(), self.height()
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(BG4))
+        p.drawRoundedRect(0, 0, w, h, 2, 2)
+        fill = int(w * min(1.0, self._value / self._maximum))
+        if fill > 0:
+            p.setBrush(QColor(self._colour))
+            p.drawRoundedRect(0, 0, fill, h, 2, 2)
+        p.end()
+
+
+# ──────────────────────────────────────────────────────────
+# Task row  (left panel task list)
+# ──────────────────────────────────────────────────────────
+
+class TaskRow(QWidget):
     clock_in_requested  = pyqtSignal(str)
     clock_out_requested = pyqtSignal(str)
 
     def __init__(self, task_name: str, colour: str,
                  total_sec: float = 0, max_sec: float = 1,
                  n_sessions: int = 0, clocked_in: bool = False,
-                 elapsed_sec: float = 0, compact: bool = False,
-                 parent=None):
+                 elapsed_sec: float = 0, parent=None):
         super().__init__(parent)
         self._name       = task_name
         self._colour     = colour
         self._clocked_in = clocked_in
 
-        pad = PAD_SM if compact else PAD_MD
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, pad // 2, 0, pad // 2)
-        layout.setSpacing(8)
+        self.setStyleSheet(
+            f"TaskRow {{ border-bottom: 1px solid {BORDER};"
+            f" background: transparent; }}"
+        )
 
-        # Colour dot
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(4, 8, 4, 8)
+        lay.setSpacing(8)
+
+        # Dot
         dot = QLabel("●")
-        dot.setStyleSheet(f"color: {colour}; font-size: 10px;")
+        dot.setStyleSheet(
+            f"color: {colour}; font-size: 11px;"
+            f" background: transparent; border: none;"
+        )
         dot.setFixedWidth(14)
-        layout.addWidget(dot)
+        lay.addWidget(dot)
 
-        # Task name
+        # Name
         name_lbl = QLabel(task_name)
-        name_lbl.setStyleSheet(f"color: {TEXT}; font-size: 11px;")
-        name_lbl.setMinimumWidth(170)
-        name_lbl.setMaximumWidth(220)
-        layout.addWidget(name_lbl)
+        name_lbl.setStyleSheet(
+            f"color: {TEXT}; font-size: 11px;"
+            f" background: transparent; border: none;"
+        )
+        name_lbl.setMinimumWidth(120)
+        lay.addWidget(name_lbl)
 
-        # Progress bar (custom painted)
+        # Bar
         self._bar = _MiniBar(total_sec, max_sec, colour)
-        layout.addWidget(self._bar, stretch=1)
+        lay.addWidget(self._bar, stretch=1)
 
-        # Duration label
+        # Duration
         from ..core.models import fmt_dur
         self._dur_lbl = QLabel(fmt_dur(total_sec, short=True))
         self._dur_lbl.setStyleSheet(
             f"color: {TEXT}; font-size: 11px; font-weight: 600;"
-            f" min-width: 64px;"
+            f" min-width: 56px; background: transparent; border: none;"
         )
         self._dur_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        layout.addWidget(self._dur_lbl)
+        lay.addWidget(self._dur_lbl)
 
-        # Session count
-        sess_lbl = QLabel(f"{n_sessions} sess.")
-        sess_lbl.setStyleSheet(f"color: {MUTED}; font-size: 10px; min-width: 48px;")
-        sess_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        layout.addWidget(sess_lbl)
-
-        # Clock elapsed (shown only when clocked in)
+        # Elapsed (clocked in)
         self._elapsed_lbl = QLabel()
         self._elapsed_lbl.setStyleSheet(
-            f"color: {SUCCESS}; font-size: 10px; min-width: 56px;"
+            f"color: {SUCCESS}; font-size: 10px; min-width: 50px;"
+            f" background: transparent; border: none;"
         )
         self._elapsed_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self._elapsed_lbl.setVisible(clocked_in)
         if clocked_in:
             self._elapsed_lbl.setText(fmt_dur(elapsed_sec, short=True))
-        layout.addWidget(self._elapsed_lbl)
+        lay.addWidget(self._elapsed_lbl)
 
         # Clock button
         self._btn = QPushButton()
         self._btn.setFixedSize(72, 24)
-        self._update_button()
+        self._update_btn()
         self._btn.clicked.connect(self._on_clock)
-        layout.addWidget(self._btn)
+        lay.addWidget(self._btn)
 
-        # Separator
-        self.setStyleSheet(
-            f"QWidget {{ border-bottom: 1px solid {BORDER}; }}"
-        )
-
-    def _update_button(self) -> None:
+    def _update_btn(self) -> None:
         if self._clocked_in:
             self._btn.setText("Clock Out")
             self._btn.setStyleSheet(
                 f"QPushButton {{ background: {DANGER}; color: white;"
-                f" border-radius: 4px; font-size: 10px; font-weight: 600; }}"
+                f" border-radius: 5px; font-size: 10px; font-weight: 600;"
+                f" border: none; }}"
                 f" QPushButton:hover {{ background: #c0392b; }}"
             )
         else:
             self._btn.setText("Clock In")
             self._btn.setStyleSheet(
                 f"QPushButton {{ background: {SUCCESS}; color: white;"
-                f" border-radius: 4px; font-size: 10px; font-weight: 600; }}"
-                f" QPushButton:hover {{ background: #388E3C; }}"
+                f" border-radius: 5px; font-size: 10px; font-weight: 600;"
+                f" border: none; }}"
+                f" QPushButton:hover {{ background: #2aab6f; }}"
             )
 
     def _on_clock(self) -> None:
@@ -364,94 +525,107 @@ class TaskRow(QWidget):
     def set_clocked_in(self, state: bool) -> None:
         self._clocked_in = state
         self._elapsed_lbl.setVisible(state)
-        self._update_button()
-
-
-class _MiniBar(QWidget):
-    def __init__(self, value: float, maximum: float,
-                 colour: str, parent=None):
-        super().__init__(parent)
-        self._value   = value
-        self._maximum = max(1.0, maximum)
-        self._colour  = colour
-        self.setFixedHeight(6)
-
-    def paintEvent(self, _):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        w, h = self.width(), self.height()
-        p.setPen(Qt.NoPen)
-        p.setBrush(QColor(BORDER))
-        p.drawRoundedRect(0, 0, w, h, 3, 3)
-        fill_w = int(w * min(1.0, self._value / self._maximum))
-        if fill_w > 0:
-            p.setBrush(QColor(self._colour))
-            p.drawRoundedRect(0, 0, fill_w, h, 3, 3)
+        self._update_btn()
 
 
 # ──────────────────────────────────────────────────────────
-# Goal progress bar
+# Goal row  (left panel goal progress)
 # ──────────────────────────────────────────────────────────
-class GoalBar(QWidget):
-    """Thin colour-coded bar showing progress toward a goal."""
+
+class GoalRow(QWidget):
+    """Rich goal display: progress, deadline, pace indicator."""
 
     def __init__(self, task_name: str, colour: str, parent=None):
         super().__init__(parent)
         self._colour = colour
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 2, 0, 2)
-        layout.setSpacing(8)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 4, 0, 8)
+        lay.setSpacing(3)
 
-        layout.addWidget(label(task_name, TEXT, size=10))
-        self._bar = _MiniBar(0, 1, colour)
-        self._bar.setFixedHeight(8)
-        layout.addWidget(self._bar, stretch=1)
-        self._pct_lbl  = label("0%",  TEXT, size=10)
-        self._eta_lbl  = label("",    MUTED, size=9)
-        layout.addWidget(self._pct_lbl)
-        layout.addWidget(self._eta_lbl)
-
-    def update(self, progress: float, eta_days: Optional[float],
-               goal_hours: float) -> None:  # type: ignore[override]
-        self._bar._value   = progress
-        self._bar._maximum = 1.0
-        self._bar.update()
-        pct_int = int(progress * 100)
-        colour  = SUCCESS if pct_int >= 80 else (WARNING if pct_int >= 40 else DANGER)
-        self._pct_lbl.setText(f"{pct_int}%")
-        self._pct_lbl.setStyleSheet(
+        # Top row: dot + name + percentage
+        top = QHBoxLayout()
+        top.setSpacing(6)
+        dot = QLabel("●")
+        dot.setStyleSheet(
             f"color: {colour}; font-size: 10px;"
+            f" background: transparent; border: none;"
         )
-        if eta_days is not None:
-            self._eta_lbl.setText(f"~{eta_days:.0f} d left")
+        dot.setFixedWidth(12)
+        top.addWidget(dot)
+        self._name_lbl = QLabel(task_name)
+        self._name_lbl.setStyleSheet(
+            f"color: {TEXT}; font-size: 10px; font-weight: 600;"
+            f" background: transparent; border: none;"
+        )
+        top.addWidget(self._name_lbl, stretch=1)
+        self._pct_lbl = QLabel("0%")
+        self._pct_lbl.setStyleSheet(
+            f"color: {MUTED}; font-size: 10px;"
+            f" background: transparent; border: none;"
+        )
+        top.addWidget(self._pct_lbl)
+        lay.addLayout(top)
+
+        # Progress bar
+        self._bar = _MiniBar(0, 1, colour)
+        lay.addWidget(self._bar)
+
+        # Detail row: hours / goal · deadline
+        self._detail_lbl = QLabel()
+        self._detail_lbl.setStyleSheet(
+            f"color: {MUTED}; font-size: 9px;"
+            f" background: transparent; border: none;"
+        )
+        lay.addWidget(self._detail_lbl)
+
+        # Pace row
+        self._pace_lbl = QLabel()
+        self._pace_lbl.setStyleSheet(
+            f"color: {MUTED}; font-size: 9px;"
+            f" background: transparent; border: none;"
+        )
+        lay.addWidget(self._pace_lbl)
+
+    def update(self, progress: float, goal_hours: float,
+               daily_avg: float, req_hpd: Optional[float],
+               deadline_days: Optional[int]) -> None:  # type: ignore[override]
+        pct = int(progress * 100)
+        from ..core.models import fmt_dur
+        done_h = progress * goal_hours
+        self._bar.set(progress, 1.0, self._colour)
+
+        # Color based on progress
+        if pct >= 80:
+            c = SUCCESS
+        elif pct >= 40:
+            c = WARNING
         else:
-            self._eta_lbl.setText(f"goal: {goal_hours:.0f}h")
+            c = MUTED
 
+        self._pct_lbl.setText(f"{pct}%")
+        self._pct_lbl.setStyleSheet(
+            f"color: {c}; font-size: 10px;"
+            f" background: transparent; border: none;"
+        )
 
-# ──────────────────────────────────────────────────────────
-# Preset date-range buttons
-# ──────────────────────────────────────────────────────────
-class PresetBar(QWidget):
-    preset_selected = pyqtSignal(str)
+        done_str = fmt_dur(done_h * 3600, short=True)
+        goal_str = fmt_dur(goal_hours * 3600, short=True)
+        detail   = f"{done_str} / {goal_str}"
+        if deadline_days is not None:
+            detail += f"  ·  due in {deadline_days}d"
+        self._detail_lbl.setText(detail)
 
-    PRESETS = ["Last 7d", "Last 30d", "This month", "Last month",
-               "This week", "Last week", "All"]
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(4)
-        layout.addWidget(label("Quick:", MUTED, size=10))
-        for p in self.PRESETS:
-            btn = QPushButton(p)
-            btn.setFixedHeight(22)
-            btn.setStyleSheet(
-                f"QPushButton {{ background: {BG3}; color: {MUTED};"
-                f" border: 1px solid {BORDER}; border-radius: 4px;"
-                f" font-size: 10px; padding: 0 8px; }}"
-                f" QPushButton:hover {{ color: {TEXT}; }}"
+        if req_hpd is not None:
+            on_pace = daily_avg >= req_hpd
+            icon    = "✓" if on_pace else "⚠"
+            col     = SUCCESS if on_pace else WARNING
+            self._pace_lbl.setText(
+                f"{icon}  {req_hpd:.1f}h/day needed  ·  avg {daily_avg:.1f}h/day"
             )
-            btn.clicked.connect(lambda _, preset=p: self.preset_selected.emit(preset))
-            layout.addWidget(btn)
-        layout.addStretch()
+            self._pace_lbl.setStyleSheet(
+                f"color: {col}; font-size: 9px;"
+                f" background: transparent; border: none;"
+            )
+            self._pace_lbl.setVisible(True)
+        else:
+            self._pace_lbl.setVisible(False)

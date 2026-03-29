@@ -66,13 +66,21 @@ class Session:
 # Task
 # ──────────────────────────────────────────────────────────
 @dataclass
+class GoalSpec:
+    """Portable goal config stored on MainWindow and written onto Tasks."""
+    hours:    float     = 0.0
+    deadline: Optional[date] = None
+
+
+@dataclass
 class Task:
     name: str
     tag: str
     colour: str
     start_line: int
-    sessions: list[Session] = field(default_factory=list)
-    goal_hours: float = 0.0          # user-defined target (0 = no goal)
+    sessions:      list[Session]   = field(default_factory=list)
+    goal_hours:    float           = 0.0   # target total hours (0 = no goal)
+    goal_deadline: Optional[date]  = None  # optional deadline
 
     # ── Clock state ──────────────────────────
     @property
@@ -129,6 +137,26 @@ class Task:
             return None
         remaining = max(0.0, self.goal_hours - self.total_hours)
         return remaining / daily_avg_hours
+
+    def hours_remaining(self) -> float:
+        return max(0.0, self.goal_hours - self.total_hours)
+
+    def required_daily_hours(self) -> Optional[float]:
+        """Hours/day needed to hit deadline. None if no deadline or already done."""
+        if not self.goal_deadline or self.goal_hours <= 0:
+            return None
+        days_left = (self.goal_deadline - date.today()).days
+        if days_left <= 0:
+            return None
+        remaining = self.hours_remaining()
+        if remaining <= 0:
+            return None
+        return remaining / days_left
+
+    def deadline_days_left(self) -> Optional[int]:
+        if not self.goal_deadline:
+            return None
+        return (self.goal_deadline - date.today()).days
 
 
 # ──────────────────────────────────────────────────────────
