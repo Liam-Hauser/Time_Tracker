@@ -11,7 +11,7 @@ from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QObject, QDate
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QScrollArea,
-    QFrame, QSplitter, QMessageBox,
+    QFrame, QSplitter, QMessageBox, QTabWidget,
     QDoubleSpinBox, QDialog, QDialogButtonBox,
     QDateEdit, QLineEdit, QComboBox,
 )
@@ -25,15 +25,18 @@ from ..core import (
     this_month_range, last_month_range, last_n_days,
     fmt_dur,
 )
-from ..core.models import Task
+from ..core.models import Task, CATEGORY_COLOUR_TAG as _CATEGORY_COLOUR_TAG_IMPORT
 from ..charts.panels import (
     StackedAreaChart, WeekdayBarChart, HourHeatmap, WeeklyCompChart,
+    CategoryBreakdownChart,
 )
 from .widgets import (
     MetricCard, InsightStrip, ChartPanel, CollapsibleSection,
     RangeSlider, TaskRow, GoalRow, PresetBar,
-    h_line, v_line, label, card_frame,
+    h_line, v_line, label, card_frame, make_chart_panel,
+    EditSessionDialog, AddSessionDialog,
 )
+from .tab_widgets import CategoryTabWidget, TaskTabWidget
 from .theme import (
     BG, BG2, BG3, BG4, BORDER, BORDER2,
     TEXT, MUTED, FAINT, ACCENT, SUCCESS, WARNING, DANGER,
@@ -283,11 +286,16 @@ class NewCategoryDialog(QDialog):
         root.addWidget(btns)
 
     def _on_accept(self) -> None:
-        if not self._name.text().strip():
+        name = self._name.text().strip()
+        if not name:
             self._name.setStyleSheet(
                 _INPUT_CSS + f" QLineEdit {{ border-color: {DANGER}; }}"
             )
             return
+        # Enforce capital first letter
+        if name[0].islower():
+            name = name[0].upper() + name[1:]
+            self._name.setText(name)
         self.accept()
 
     def values(self) -> tuple[str, str]:
@@ -347,6 +355,76 @@ class NewTaskDialog(QDialog):
 
 
 # ──────────────────────────────────────────────────────────
+# Rename / Move task dialogs
+# ──────────────────────────────────────────────────────────
+
+class RenameTaskDialog(QDialog):
+    def __init__(self, current_name: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Rename Task")
+        self.setFixedWidth(340)
+        self.setStyleSheet(
+            f"background: {BG}; color: {TEXT};"
+            f" QLabel {{ background: transparent; }}"
+        )
+        root = QVBoxLayout(self)
+        root.setSpacing(PAD_SM)
+        root.addWidget(label("New name", MUTED, size=10))
+        self._name = QLineEdit(current_name)
+        self._name.setStyleSheet(_INPUT_CSS)
+        self._name.selectAll()
+        root.addWidget(self._name)
+        root.addStretch()
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btns.setStyleSheet(f"color: {TEXT};")
+        btns.accepted.connect(self._on_accept)
+        btns.rejected.connect(self.reject)
+        root.addWidget(btns)
+
+    def _on_accept(self) -> None:
+        if not self._name.text().strip():
+            self._name.setStyleSheet(
+                _INPUT_CSS + f" QLineEdit {{ border-color: {DANGER}; }}")
+            return
+        self.accept()
+
+    def value(self) -> str:
+        return self._name.text().strip()
+
+
+class MoveTaskDialog(QDialog):
+    def __init__(self, categories: list[tuple[str, str]], parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Move to Category")
+        self.setFixedWidth(340)
+        self.setStyleSheet(
+            f"background: {BG}; color: {TEXT};"
+            f" QLabel {{ background: transparent; }}"
+        )
+        root = QVBoxLayout(self)
+        root.setSpacing(PAD_SM)
+        root.addWidget(label("Select category", MUTED, size=10))
+        self._category = QComboBox()
+        self._category.setStyleSheet(_COMBO_CSS)
+        for cat_name, colour_tag in categories:
+            swatch = _swatch_for_tag(colour_tag)
+            self._category.addItem(f"● {cat_name}", userData=cat_name)
+            idx = self._category.count() - 1
+            from PyQt5.QtCore import Qt as _Qt
+            self._category.setItemData(idx, QColor(swatch), _Qt.ForegroundRole)
+        root.addWidget(self._category)
+        root.addStretch()
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btns.setStyleSheet(f"color: {TEXT};")
+        btns.accepted.connect(self.accept)
+        btns.rejected.connect(self.reject)
+        root.addWidget(btns)
+
+    def value(self) -> str:
+        return self._category.currentData()
+
+
+# ──────────────────────────────────────────────────────────
 # Main window
 # ──────────────────────────────────────────────────────────
 
@@ -357,10 +435,12 @@ class MainWindow(QMainWindow):
         self.resize(1600, 960)
 
         self._store      = DBStore()
-        self._result:     Optional[ParseResult]  = None
-        self._goals:      dict[str, GoalSpec]    = {}
-        self._categories: list[tuple[str, str]]  = []
-        self._task_rows:  dict[str, TaskRow]     = {}
+        self._result:      Optional[ParseResult]          = None
+        self._goals:       dict[str, GoalSpec]            = {}
+        self._categories:  list[tuple[str, str]]          = []
+        self._task_rows:   dict[str, TaskRow]             = {}
+        self._category_tabs: dict[str, CategoryTabWidget] = {}
+        self._task_tabs:     dict[str, TaskTabWidget]     = {}
 
         self._date_low  = 0
         self._date_high = 0
@@ -438,11 +518,13 @@ class MainWindow(QMainWindow):
         lay.addWidget(label("PostgreSQL", MUTED, size=10))
         lay.addStretch()
 
-        for txt, slot in [("+ New Task",      self._on_new_task),
-                          ("+ New Category",  self._on_new_category),
-                          ("Reload",          self._trigger_reload),
-                          ("Goals…",          self._on_edit_goals)]:
-            lay.addWidget(self._mk_btn(txt, slot))
+        for txt, slot in [("Reload",   self._trigger_reload),
+                          ("Goals…",  self._on_edit_goals),
+                          ("☀ Light", self._on_toggle_theme)]:
+            btn = self._mk_btn(txt, slot)
+            if txt.startswith("☀"):
+                self._theme_btn = btn
+            lay.addWidget(btn)
 
         self._updated_lbl = label("Loading…", FAINT, size=9)
         lay.addWidget(self._updated_lbl)
@@ -462,7 +544,8 @@ class MainWindow(QMainWindow):
 
         # ── Left panel (fixed 340 px) ─────────────────────
         left = QWidget()
-        left.setFixedWidth(340)
+        left.setMinimumWidth(220)
+        left.setMaximumWidth(560)
         left.setStyleSheet(f"background: {BG};")
         ll = QVBoxLayout(left)
         ll.setContentsMargins(PAD_MD, PAD_MD, PAD_SM, PAD_MD)
@@ -484,8 +567,24 @@ class MainWindow(QMainWindow):
         rl.addWidget(self._range_lbl)
         ll.addWidget(rc)
 
-        # Task list
-        ll.addWidget(label("Tasks", TEXT, bold=True, size=11))
+        # Task list header: label + "+ Category" button
+        tasks_hdr = QHBoxLayout()
+        tasks_hdr.setContentsMargins(0, 0, 0, 0)
+        tasks_hdr.addWidget(label("Tasks", TEXT, bold=True, size=11))
+        tasks_hdr.addStretch()
+        add_cat_btn = QPushButton("+ Category")
+        add_cat_btn.setFixedHeight(22)
+        add_cat_btn.setStyleSheet(
+            f"QPushButton {{ background: transparent; color: {MUTED};"
+            f" border: 1px solid {BORDER}; border-radius: 4px;"
+            f" font-size: 10px; padding: 0 8px; }}"
+            f" QPushButton:hover {{ color: {TEXT}; background: {BG3};"
+            f" border-color: {BORDER2}; }}"
+        )
+        add_cat_btn.clicked.connect(self._on_new_category)
+        tasks_hdr.addWidget(add_cat_btn)
+        ll.addLayout(tasks_hdr)
+
         task_scroll = QScrollArea()
         task_scroll.setWidgetResizable(True)
         task_scroll.setStyleSheet(
@@ -515,10 +614,36 @@ class MainWindow(QMainWindow):
 
         splitter.addWidget(left)
 
-        # ── Right panel (scrollable) ──────────────────────
-        right_scroll = QScrollArea()
-        right_scroll.setWidgetResizable(True)
-        right_scroll.setStyleSheet(
+        # ── Right panel: tab widget ───────────────────────
+        self._tabs = QTabWidget()
+        self._tabs.setTabsClosable(True)
+        self._tabs.setMovable(True)
+        self._tabs.setStyleSheet(
+            f"QTabWidget::pane {{ border: none; background: {BG}; }}"
+            f"QTabWidget::tab-bar {{ left: 0px; }}"
+            f"QTabBar::tab {{ background: {BG2}; color: {MUTED};"
+            f" border: 1px solid {BORDER}; border-bottom: none;"
+            f" padding: 5px 14px; font-size: 10px;"
+            f" border-top-left-radius: 4px; border-top-right-radius: 4px; }}"
+            f"QTabBar::tab:selected {{ background: {BG3}; color: {TEXT}; }}"
+            f"QTabBar::tab:hover {{ color: {TEXT}; background: {BG3}; }}"
+            f"QTabBar::close-button {{ image: none; }}"
+        )
+        self._tabs.tabCloseRequested.connect(self._on_tab_close_requested)
+        overview = self._build_overview_tab()
+        self._tabs.addTab(overview, "Overview")
+        # Prevent the Overview tab from being closable
+        self._tabs.tabBar().setTabButton(0, self._tabs.tabBar().RightSide, None)
+
+        splitter.addWidget(self._tabs)
+        splitter.setSizes([340, 1260])
+        root.addWidget(splitter, stretch=1)
+
+    def _build_overview_tab(self) -> QWidget:
+        """Build and return the overview scroll area (former right panel)."""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet(
             f"QScrollArea {{ border: none; background: {BG}; }}"
             f"QScrollBar:vertical {{ background: {BG2}; width: 4px; }}"
             f"QScrollBar::handle:vertical {{ background: {BORDER}; border-radius: 2px; }}"
@@ -530,14 +655,15 @@ class MainWindow(QMainWindow):
         cl.setContentsMargins(PAD_SM, PAD_MD, PAD_MD, PAD_MD)
         cl.setSpacing(PAD_SM)
 
-        # Metric cards (4 across)
+        # Metric cards (5 across)
         mc_row = QHBoxLayout()
         mc_row.setSpacing(PAD_SM)
+        self._mc_today    = MetricCard("Today")
         self._mc_total    = MetricCard("Total tracked time")
         self._mc_sessions = MetricCard("Sessions")
         self._mc_avg      = MetricCard("Avg session")
         self._mc_streak   = MetricCard("Current streak")
-        for mc in [self._mc_total, self._mc_sessions,
+        for mc in [self._mc_today, self._mc_total, self._mc_sessions,
                    self._mc_avg, self._mc_streak]:
             mc_row.addWidget(mc)
         cl.addLayout(mc_row)
@@ -546,37 +672,30 @@ class MainWindow(QMainWindow):
         self._insight_strip = InsightStrip()
         cl.addWidget(self._insight_strip)
 
-        # Charts
-        def _panel(title: str, chart_widget: QWidget,
-                   attr: str) -> ChartPanel:
-            pan = ChartPanel(title)
-            pan.add_widget(chart_widget)
-            setattr(self, attr, chart_widget)
-            return pan
-
         # Daily stacked area (full width)
         self._stacked_chart = StackedAreaChart()
-        cl.addWidget(_panel("Daily activity", self._stacked_chart, "_stacked_chart"))
+        cl.addWidget(make_chart_panel("Daily activity", self._stacked_chart))
 
         # Weekday + Weekly comparison side by side
         row2 = QHBoxLayout()
         row2.setSpacing(PAD_SM)
         self._wd_chart = WeekdayBarChart()
-        row2.addWidget(_panel("Avg by weekday", self._wd_chart, "_wd_chart"))
+        row2.addWidget(make_chart_panel("Avg by weekday", self._wd_chart))
         self._wc_chart = WeeklyCompChart()
-        row2.addWidget(_panel("This week vs last week", self._wc_chart, "_wc_chart"))
+        row2.addWidget(make_chart_panel("This week vs last week", self._wc_chart))
         cl.addLayout(row2)
 
         # Hour heatmap (full width)
         self._hm_chart = HourHeatmap()
-        cl.addWidget(_panel("Hour-of-day heatmap", self._hm_chart, "_hm_chart"))
+        cl.addWidget(make_chart_panel("Hour-of-day heatmap", self._hm_chart))
+
+        # Category breakdown (full width)
+        self._cat_breakdown = CategoryBreakdownChart()
+        cl.addWidget(make_chart_panel("Category breakdown", self._cat_breakdown))
 
         cl.addStretch()
-        right_scroll.setWidget(right_inner)
-        splitter.addWidget(right_scroll)
-
-        splitter.setSizes([340, 1260])
-        root.addWidget(splitter, stretch=1)
+        scroll.setWidget(right_inner)
+        return scroll
 
     # ── Data loading ─────────────────────────────────────
 
@@ -620,6 +739,7 @@ class MainWindow(QMainWindow):
         self._updated_lbl.setText(f"Updated {ts}  ·  {len(result.tasks)} tasks")
 
         self._rebuild_task_rows()
+        self._rebuild_category_tabs()
         self._refresh_all()
 
     def _on_reload_error(self, msg: str) -> None:
@@ -653,19 +773,39 @@ class MainWindow(QMainWindow):
                         key=lambda t: t.total_seconds, reverse=True):
             elapsed = (t.open_session.duration.total_seconds()
                        if t.open_session else 0)
+            cat_colour = _swatch_for_tag(
+                _CATEGORY_COLOUR_TAG_IMPORT.get(t.tag, "none")
+            )
             row = TaskRow(
-                task_name   = t.name,
-                colour      = t.colour,
-                total_sec   = t.total_seconds,
-                max_sec     = max_sec,
-                n_sessions  = t.session_count,
-                clocked_in  = t.is_clocked_in,
-                elapsed_sec = elapsed,
+                task_name        = t.name,
+                colour           = t.colour,
+                total_sec        = t.total_seconds,
+                max_sec          = max_sec,
+                n_sessions       = t.session_count,
+                clocked_in       = t.is_clocked_in,
+                elapsed_sec      = elapsed,
+                category_colour  = cat_colour,
             )
             row.clock_in_requested.connect(self._on_clock_in)
             row.clock_out_requested.connect(self._on_clock_out)
+            row.rename_requested.connect(self._on_rename_task)
+            row.move_requested.connect(self._on_move_task)
+            row.delete_requested.connect(self._on_delete_task)
+            row.clicked.connect(self._open_task_tab)
             self._task_layout.insertWidget(self._task_layout.count() - 1, row)
             self._task_rows[t.name] = row
+
+        # "+ New Task" button at the bottom of the list
+        add_btn = QPushButton("+ New Task")
+        add_btn.setFixedHeight(28)
+        add_btn.setStyleSheet(
+            f"QPushButton {{ background: transparent; color: {FAINT};"
+            f" border: 1px dashed {BORDER}; border-radius: 5px;"
+            f" font-size: 10px; margin: 4px 0px; }}"
+            f" QPushButton:hover {{ color: {MUTED}; border-color: {BORDER2}; }}"
+        )
+        add_btn.clicked.connect(self._on_new_task)
+        self._task_layout.insertWidget(self._task_layout.count() - 1, add_btn)
 
         self._rebuild_goal_rows()
 
@@ -711,9 +851,10 @@ class MainWindow(QMainWindow):
         self._update_metric_cards(stats)
         self._update_range_label()
 
-        self._stacked_chart.refresh(stats)
+        self._stacked_chart.refresh(stats, self._goals)
         self._wd_chart.refresh(stats)
         self._hm_chart.refresh(stats)
+        self._cat_breakdown.refresh(stats)
 
         if self._result:
             comp = WeeklyComparison(self._result.tasks)
@@ -729,6 +870,30 @@ class MainWindow(QMainWindow):
 
         self._rebuild_goal_rows()
 
+        if not self._result or not self._all_dates:
+            return
+        start = self._all_dates[self._date_low]
+        end   = self._all_dates[self._date_high]
+
+        # Refresh category tabs
+        for tab in self._category_tabs.values():
+            tab.refresh(start, end, self._result.tasks, self._goals)
+
+        # Refresh task tabs
+        for task_name, tab in list(self._task_tabs.items()):
+            task = self._result.task_by_name(task_name)
+            if task:
+                tab.update_task(task)
+                tab.refresh(start, end)
+            else:
+                # Task was deleted — remove its tab
+                for i in range(self._tabs.count()):
+                    if self._tabs.widget(i) is tab:
+                        self._tabs.removeTab(i)
+                        break
+                self._task_tabs.pop(task_name, None)
+                tab.deleteLater()
+
     def _current_stats(self) -> Optional[RangeStats]:
         if not self._result or not self._all_dates:
             return None
@@ -737,6 +902,19 @@ class MainWindow(QMainWindow):
         return RangeStats(self._result.tasks, s, e)
 
     def _update_metric_cards(self, stats: RangeStats) -> None:
+        from datetime import date as _date
+        today = _date.today()
+        today_sec = sum(
+            s.duration_seconds
+            for t in (self._result.tasks if self._result else [])
+            for s in t.sessions
+            if s.start.date() == today
+        )
+        self._mc_today.update_value(
+            fmt_dur(today_sec, short=True),
+            f"{today_sec / 3600:.1f}h so far",
+        )
+
         self._mc_total.update_value(
             fmt_dur(stats.grand_total_seconds, short=True),
             f"{stats.grand_total_seconds / 3600:.1f}h total",
@@ -870,6 +1048,191 @@ class MainWindow(QMainWindow):
             return
         # Refresh categories immediately so the next NewTaskDialog sees it
         self._categories = self._store.load_categories()
+
+    # ── Tab management ───────────────────────────────────
+
+    def _rebuild_category_tabs(self) -> None:
+        """Recreate one tab per category found in current tasks."""
+        # Remove all non-overview tabs
+        while self._tabs.count() > 1:
+            w = self._tabs.widget(1)
+            self._tabs.removeTab(1)
+            if w:
+                w.deleteLater()
+        self._category_tabs.clear()
+        # Clear task tabs too (they'll be reopened on demand)
+        self._task_tabs.clear()
+
+        if not self._result:
+            return
+
+        seen: set[str] = set()
+        for t in self._result.tasks:
+            if t.tag and t.tag not in seen:
+                seen.add(t.tag)
+                tab = CategoryTabWidget(t.tag, parent=self)
+                display = t.tag if len(t.tag) <= 14 else t.tag[:13] + "…"
+                self._tabs.addTab(tab, display)
+                # Prevent category tabs from being closable
+                idx = self._tabs.count() - 1
+                self._tabs.tabBar().setTabButton(
+                    idx, self._tabs.tabBar().RightSide, None)
+                self._category_tabs[t.tag] = tab
+
+    def _open_task_tab(self, task_name: str) -> None:
+        """Open or focus the task detail tab for the given task."""
+        if task_name in self._task_tabs:
+            tab = self._task_tabs[task_name]
+            for i in range(self._tabs.count()):
+                if self._tabs.widget(i) is tab:
+                    self._tabs.setCurrentIndex(i)
+                    return
+        if not self._result:
+            return
+        task = self._result.task_by_name(task_name)
+        if not task:
+            return
+        tab = TaskTabWidget(task, parent=self)
+        display = task_name if len(task_name) <= 14 else task_name[:13] + "…"
+        self._tabs.addTab(tab, display)
+        self._task_tabs[task_name] = tab
+        self._tabs.setCurrentWidget(tab)
+
+        # Refresh immediately with current range
+        if self._all_dates:
+            tab.refresh(
+                self._all_dates[self._date_low],
+                self._all_dates[self._date_high],
+            )
+
+    def _on_tab_close_requested(self, index: int) -> None:
+        """Only task tabs are closable."""
+        w = self._tabs.widget(index)
+        if isinstance(w, TaskTabWidget):
+            self._task_tabs.pop(w.task_name, None)
+            self._tabs.removeTab(index)
+            w.deleteLater()
+
+    # ── Task editing ─────────────────────────────────────
+
+    def _on_rename_task(self, task_name: str) -> None:
+        task = self._result.task_by_name(task_name) if self._result else None
+        if not task:
+            return
+        dlg = RenameTaskDialog(task_name, parent=self)
+        if dlg.exec_() != QDialog.Accepted:
+            return
+        new_name = dlg.value()
+        try:
+            self._store.rename_task(task.start_line, new_name)
+        except Exception as e:
+            QMessageBox.warning(self, "Rename failed", str(e))
+            return
+        self._trigger_reload()
+
+    def _on_move_task(self, task_name: str) -> None:
+        task = self._result.task_by_name(task_name) if self._result else None
+        if not task:
+            return
+        dlg = MoveTaskDialog(self._categories, parent=self)
+        if dlg.exec_() != QDialog.Accepted:
+            return
+        new_cat = dlg.value()
+        try:
+            self._store.move_task(task.start_line, new_cat)
+        except Exception as e:
+            QMessageBox.warning(self, "Move failed", str(e))
+            return
+        self._trigger_reload()
+
+    def _on_delete_task(self, task_name: str) -> None:
+        task = self._result.task_by_name(task_name) if self._result else None
+        if not task:
+            return
+        reply = QMessageBox.question(
+            self, "Delete task",
+            f"Delete '{task_name}' and all its sessions permanently?\n\nThis cannot be undone.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        try:
+            self._store.delete_task(task.start_line)
+        except Exception as e:
+            QMessageBox.warning(self, "Delete failed", str(e))
+            return
+        # Close any open task tab for this task
+        if task_name in self._task_tabs:
+            tab = self._task_tabs.pop(task_name)
+            for i in range(self._tabs.count()):
+                if self._tabs.widget(i) is tab:
+                    self._tabs.removeTab(i)
+                    break
+            tab.deleteLater()
+        self._trigger_reload()
+
+    # ── Theme toggle ─────────────────────────────────────────
+
+    def _on_toggle_theme(self) -> None:
+        from ..ui import theme as _theme
+        # Switch palette module-level vars and propagate to consumer modules
+        if _theme.IS_DARK:
+            _theme.set_light_mode()
+            self._theme_btn.setText("☾ Dark")
+        else:
+            _theme.set_dark_mode()
+            self._theme_btn.setText("☀ Light")
+        # Rebuild UI with new colours; preserve data state
+        self._category_tabs = {}
+        self._task_tabs     = {}
+        self._task_rows     = {}
+        self._build_ui()
+        self._apply_palette()
+        if self._result:
+            self._on_reload_done(self._result)
+
+    # ── Session management ───────────────────────────────────
+
+    def _on_add_session(self, task_id: int) -> None:
+        dlg = AddSessionDialog(parent=self)
+        if dlg.exec_() != QDialog.Accepted:
+            return
+        start_dt, end_dt = dlg.values()
+        try:
+            self._store.add_session(task_id, start_dt, end_dt)
+        except Exception as e:
+            QMessageBox.warning(self, "Failed to add session", str(e))
+            return
+        self._trigger_reload()
+
+    def _on_edit_session(self, session_id: int, start, end) -> None:
+        dlg = EditSessionDialog(start, end, parent=self)
+        if dlg.exec_() != QDialog.Accepted:
+            return
+        new_start, new_end = dlg.values()
+        try:
+            self._store.update_session(session_id, new_start, new_end)
+        except Exception as e:
+            QMessageBox.warning(self, "Failed to update session", str(e))
+            return
+        self._trigger_reload()
+
+    def _on_delete_session(self, session_id: int, is_open: bool) -> None:
+        reply = QMessageBox.question(
+            self, "Delete session",
+            "Delete this session permanently?\n\nThis cannot be undone.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        try:
+            self._store.delete_session(session_id, is_open)
+        except Exception as e:
+            QMessageBox.warning(self, "Failed to delete session", str(e))
+            return
+        self._trigger_reload()
 
     # ── Goals ────────────────────────────────────────────
 

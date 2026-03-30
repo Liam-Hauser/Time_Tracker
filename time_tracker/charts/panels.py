@@ -15,8 +15,8 @@ from PyQt5.QtGui import (
 )
 from PyQt5.QtWidgets import QWidget, QSizePolicy
 
-from ..core.analytics import RangeStats, WeeklyComparison, date_range
-from ..core.models import Task, fmt_dur
+from ..core.analytics import RangeStats, WeeklyComparison, date_range, TaskSessionStats
+from ..core.models import Task, GoalSpec, fmt_dur
 from ..ui.theme import (
     BG2, BG3, BG4, BORDER, BORDER2,
     TEXT, MUTED, FAINT, ACCENT, SUCCESS, WARNING, DANGER,
@@ -190,12 +190,24 @@ class NativeChart(QWidget):
 # ──────────────────────────────────────────────────────────
 
 class StackedAreaChart(NativeChart):
-    """Daily tracked time as stacked filled areas per task."""
+    """Daily tracked time as stacked filled areas per task.
+
+    Optional overlays (set via ``refresh(stats, goals)``):
+    - 7-day rolling average line (dashed, ACCENT colour)
+    - Required h/day horizontal reference line (dotted, WARNING colour)
+    """
 
     _PAD = (20, 16, 56, 56)   # extra bottom for legend
 
     def __init__(self, parent=None):
         super().__init__(fixed_height=300, parent=parent)
+        self._goals: dict[str, GoalSpec] = {}
+
+    def refresh(self, stats: RangeStats,            # type: ignore[override]
+                goals: dict | None = None) -> None:
+        self._stats = stats
+        self._goals = goals or {}
+        self.update()
 
     def _paint(self, p: QPainter) -> None:
         stats  = self._stats
@@ -259,6 +271,40 @@ class StackedAreaChart(NativeChart):
             for i in range(1, len(top_pts)):
                 p.drawLine(top_pts[i - 1], top_pts[i])
 
+        # ── Rolling 7-day average overlay ─────────────────
+        if n >= 2:
+            window = 7
+            rolling = []
+            for i in range(n):
+                chunk = day_totals[max(0, i - window + 1): i + 1]
+                rolling.append(sum(chunk) / len(chunk))
+            roll_pen = QPen(QColor(ACCENT), 1.5, Qt.DashLine,
+                            Qt.RoundCap, Qt.RoundJoin)
+            p.setPen(roll_pen)
+            roll_pts = [QPointF(mx(i), my(v)) for i, v in enumerate(rolling)]
+            for i in range(1, len(roll_pts)):
+                p.drawLine(roll_pts[i - 1], roll_pts[i])
+            # Label at end
+            p.setFont(_font(8))
+            p.setPen(QColor(ACCENT))
+            lp = roll_pts[-1]
+            p.drawText(QRectF(lp.x() + 4, lp.y() - 9, 60, 18),
+                       Qt.AlignVCenter, "7d avg")
+
+        # ── Goal pace horizontal line ──────────────────────
+        req_hpd = self._compute_required_hpd(stats)
+        if 0 < req_hpd <= max_h * 1.5:
+            y_req = my(req_hpd)
+            if rect.top() <= y_req <= rect.bottom():
+                pace_pen = QPen(QColor(WARNING), 1, Qt.DotLine)
+                p.setPen(pace_pen)
+                p.drawLine(QPointF(rect.left(), y_req),
+                           QPointF(rect.right(), y_req))
+                p.setFont(_font(8))
+                p.setPen(QColor(WARNING))
+                p.drawText(QRectF(rect.right() + 2, y_req - 9, 60, 18),
+                           Qt.AlignVCenter, f"{req_hpd:.1f}h/d")
+
         # Axes labels
         self._draw_y_labels(p, rect, ticks, max_h)
         self._draw_x_date_labels(p, rect, days)
@@ -269,9 +315,106 @@ class StackedAreaChart(NativeChart):
                           pl, self.height() - pb + 24,
                           self.width() - pl - pr)
 
+    def _compute_required_hpd(self, stats: RangeStats) -> float:
+        """Sum of (remaining hours / days to deadline) across all active goals."""
+        from datetime import date as _date
+        today = _date.today()
+        total_req = 0.0
+        for task in stats.tasks:
+            gs = self._goals.get(task.name)
+            if gs and gs.hours > 0:
+                remaining = max(0.0, gs.hours - task.total_hours)
+                if remaining <= 0:
+                    continue
+                if gs.deadline and gs.deadline > today:
+                    days = (gs.deadline - today).days
+                    total_req += remaining / days
+                else:
+                    # No deadline: spread over range duration
+                    days = max(1, (stats.end - stats.start).days + 1)
+                    total_req += remaining / days
+        return total_req
+
 
 # ──────────────────────────────────────────────────────────
-# 2. Weekday pattern — avg hours per weekday, stacked
+# 2. Category breakdown — horizontal bar per category
+# ──────────────────────────────────────────────────────────
+
+class CategoryBreakdownChart(NativeChart):
+    """Horizontal bar chart showing total hours per category for the range."""
+
+    _PAD = (8, 70, 8, 140)   # top, right, bottom, left (left for labels)
+
+    def __init__(self, parent=None):
+        super().__init__(fixed_height=160, parent=parent)
+
+    def refresh(self, stats: RangeStats) -> None:  # type: ignore[override]
+        self._stats = stats
+        # Resize height to fit categories
+        cats = set(t.tag for t in stats.active_tasks)
+        n = max(1, len(cats))
+        self.setFixedHeight(self._PAD[0] + n * 38 + self._PAD[2])
+        self.update()
+
+    def _paint(self, p: QPainter) -> None:
+        stats = self._stats
+        if not stats.active_tasks:
+            self._draw_no_data(p)
+            return
+
+        # Group tasks by category — pick the first task's colour as category colour
+        cat_data: dict[str, list] = {}  # name → [hours, representative_colour]
+        for task in stats.active_tasks:
+            cat = task.tag
+            h = stats.task_seconds.get(task.name, 0) / 3600
+            if cat not in cat_data:
+                cat_data[cat] = [0.0, task.colour]
+            cat_data[cat][0] += h
+
+        if not cat_data:
+            self._draw_no_data(p)
+            return
+
+        sorted_cats = sorted(cat_data.items(),
+                             key=lambda x: x[1][0], reverse=True)
+        max_h = sorted_cats[0][1][0]
+        if max_h <= 0:
+            self._draw_no_data(p)
+            return
+
+        pt, pr, pb, pl = self._PAD
+        n = len(sorted_cats)
+        total_h = self.height() - pt - pb
+        row_h = total_h / n
+        bar_h = min(22, row_h * 0.55)
+        bar_area_w = self.width() - pl - pr
+
+        p.setFont(_font(10))
+        for i, (cat_name, (hours, colour)) in enumerate(sorted_cats):
+            yc = pt + (i + 0.5) * row_h
+            bar_w = hours / max_h * bar_area_w
+
+            # Bar
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(colour))
+            p.drawRoundedRect(QRectF(pl, yc - bar_h / 2, bar_w, bar_h), 3, 3)
+
+            # Category label (left-aligned in the reserved area)
+            display = cat_name if cat_name != "none" else "Uncategorised"
+            p.setPen(QColor(TEXT))
+            p.drawText(QRectF(0, yc - 10, pl - 10, 20),
+                       Qt.AlignRight | Qt.AlignVCenter, display)
+
+            # Value label (right of bar)
+            p.setPen(QColor(MUTED))
+            p.setFont(_font(9))
+            p.drawText(QRectF(pl + bar_w + 6, yc - 9, 60, 18),
+                       Qt.AlignLeft | Qt.AlignVCenter, f"{hours:.1f}h")
+            p.setFont(_font(10))
+
+
+# ──────────────────────────────────────────────────────────
+# 3. Weekday pattern — avg hours per weekday, stacked
 # ──────────────────────────────────────────────────────────
 
 class WeekdayBarChart(NativeChart):
@@ -565,3 +708,316 @@ class WeeklyCompChart(NativeChart):
             p.drawRoundedRect(QRectF(lx, ly + 3, 24, 8), 2, 2)
             p.setPen(QColor(MUTED))
             p.drawText(QRectF(lx + 28, ly, 48, 14), Qt.AlignVCenter, lbl)
+
+
+# ──────────────────────────────────────────────────────────
+# 5. Category donut chart
+# ──────────────────────────────────────────────────────────
+
+class CategoryPieChart(NativeChart):
+    """Donut showing relative time of each task (or category) in a RangeStats."""
+
+    def __init__(self, parent=None):
+        super().__init__(fixed_height=240, parent=parent)
+
+    def _paint(self, p: QPainter) -> None:
+        stats  = self._stats
+        active = sorted(stats.active_tasks,
+                        key=lambda t: stats.task_seconds.get(t.name, 0),
+                        reverse=True)
+        if not active:
+            self._draw_no_data(p)
+            return
+
+        total = stats.grand_total_seconds
+        if total <= 0:
+            self._draw_no_data(p)
+            return
+
+        cx = self.width() / 2
+        cy = self.height() / 2 - 10
+        outer_r = min(cx, cy) - 20
+        inner_r = outer_r * 0.55
+
+        angle = 90.0  # start at top
+        for task in active:
+            frac   = stats.task_seconds.get(task.name, 0) / total
+            span   = frac * 360.0
+            rect   = QRectF(cx - outer_r, cy - outer_r, outer_r * 2, outer_r * 2)
+            path   = QPainterPath()
+            path.moveTo(cx, cy)
+            path.arcTo(rect, angle, -span)
+            path.closeSubpath()
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(task.colour))
+            p.drawPath(path)
+            angle -= span
+
+        # Punch inner hole
+        p.setBrush(QColor(BG2))
+        p.setPen(Qt.NoPen)
+        p.drawEllipse(QRectF(cx - inner_r, cy - inner_r, inner_r * 2, inner_r * 2))
+
+        # Center text — total hours
+        from ..core.models import fmt_dur
+        p.setFont(_font(11, bold=True))
+        p.setPen(QColor(TEXT))
+        p.drawText(QRectF(cx - 40, cy - 14, 80, 28),
+                   Qt.AlignCenter, fmt_dur(total, short=True))
+
+        # Legend at bottom
+        self._draw_legend(p, active, 16, self.height() - 22, self.width() - 32)
+
+
+# ──────────────────────────────────────────────────────────
+# 6-9. Per-task charts  (driven by TaskSessionStats)
+# ──────────────────────────────────────────────────────────
+
+class _TaskChart(NativeChart):
+    """Base for charts that take TaskSessionStats instead of RangeStats."""
+
+    def __init__(self, fixed_height: int = 200, parent=None):
+        super().__init__(fixed_height=fixed_height, parent=parent)
+        self._task_stats: Optional[TaskSessionStats] = None
+
+    def refresh(self, stats: RangeStats) -> None:  # type: ignore[override]
+        pass   # not driven by RangeStats
+
+    def refresh_task(self, task_stats: TaskSessionStats) -> None:
+        self._task_stats = task_stats
+        self.update()
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.fillRect(self.rect(), QColor(BG2))
+        if self._task_stats is None:
+            self._draw_no_data(p)
+            p.end()
+            return
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setRenderHint(QPainter.TextAntialiasing)
+        self._paint(p)
+        p.end()
+
+
+class DailyBarChart(_TaskChart):
+    """One bar per day in range for a single task."""
+
+    _PAD = (20, 16, 40, 56)
+
+    def __init__(self, parent=None):
+        super().__init__(fixed_height=200, parent=parent)
+
+    def _paint(self, p: QPainter) -> None:
+        ts   = self._task_stats
+        days = date_range(ts.start, ts.end)
+        vals = [ts.daily_seconds.get(d, 0.0) / 3600 for d in days]
+        max_h = max(vals) if vals else 0.0
+        if max_h <= 0:
+            self._draw_no_data(p)
+            return
+
+        rect   = self._plot_rect()
+        n      = len(days)
+        ticks  = _nice_ticks(max_h)
+        bar_w  = max(3, rect.width() / n * 0.6)
+
+        self._draw_h_grid(p, rect, ticks, max_h)
+        self._draw_axes(p, rect)
+
+        colour = ts.task.colour
+        for i, h in enumerate(vals):
+            if h <= 0:
+                continue
+            x = rect.x() + (i + 0.5) / n * rect.width() - bar_w / 2
+            bh = h / max_h * rect.height()
+            y  = rect.bottom() - bh
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(colour))
+            p.drawRoundedRect(QRectF(x, y, bar_w, bh), 2, 2)
+
+        self._draw_y_labels(p, rect, ticks, max_h)
+        self._draw_x_date_labels(p, rect, days)
+
+
+class SessionHistogramChart(_TaskChart):
+    """Bar chart of session duration distribution in 15-min buckets."""
+
+    _PAD = (20, 16, 36, 56)
+
+    def __init__(self, parent=None):
+        super().__init__(fixed_height=200, parent=parent)
+
+    def _paint(self, p: QPainter) -> None:
+        ts      = self._task_stats
+        buckets = ts.session_length_buckets(15)
+        if not buckets:
+            self._draw_no_data(p)
+            return
+
+        rect    = self._plot_rect()
+        n       = len(buckets)
+        keys    = sorted(buckets.keys())
+        vals    = [buckets[k] for k in keys]
+        max_v   = max(vals)
+        colour  = ts.task.colour
+        bar_w   = max(4, rect.width() / n * 0.6)
+        modal   = keys[vals.index(max_v)]
+
+        for i, (k, v) in enumerate(zip(keys, vals)):
+            x  = rect.x() + (i + 0.5) / n * rect.width() - bar_w / 2
+            bh = v / max_v * rect.height()
+            y  = rect.bottom() - bh
+            c  = QColor(colour) if k == modal else QColor(BG4)
+            p.setPen(Qt.NoPen)
+            p.setBrush(c)
+            p.drawRoundedRect(QRectF(x, y, bar_w, bh), 2, 2)
+
+            # X label
+            mins = k
+            lbl  = f"{mins}m" if mins < 60 else f"{mins // 60}h"
+            p.setFont(_font(8))
+            p.setPen(QColor(MUTED))
+            p.drawText(QRectF(x - 4, rect.bottom() + 4, bar_w + 8, 14),
+                       Qt.AlignCenter, lbl)
+
+        self._draw_axes(p, rect)
+
+        # Y axis: session count
+        p.setFont(_font(9))
+        p.setPen(QColor(MUTED))
+        for v_tick in range(0, max_v + 1, max(1, max_v // 4)):
+            y = rect.bottom() - v_tick / max_v * rect.height()
+            p.drawText(QRectF(rect.left() - 30, y - 9, 26, 18),
+                       Qt.AlignRight | Qt.AlignVCenter, str(v_tick))
+
+
+class TimeOfDayBarChart(_TaskChart):
+    """24-column bar chart of hours per hour-of-day for one task."""
+
+    _PAD = (20, 16, 28, 56)
+
+    def __init__(self, parent=None):
+        super().__init__(fixed_height=180, parent=parent)
+
+    def _paint(self, p: QPainter) -> None:
+        ts     = self._task_stats
+        vals   = [ts.hour_seconds.get(h, 0.0) / 3600 for h in range(24)]
+        max_h  = max(vals) if vals else 0.0
+        if max_h <= 0:
+            self._draw_no_data(p)
+            return
+
+        rect   = self._plot_rect()
+        ticks  = _nice_ticks(max_h)
+        bar_w  = max(3, rect.width() / 24 * 0.7)
+        colour = ts.task.colour
+
+        self._draw_h_grid(p, rect, ticks, max_h)
+        self._draw_axes(p, rect)
+
+        for h, v in enumerate(vals):
+            if v <= 0:
+                continue
+            x  = rect.x() + (h + 0.5) / 24 * rect.width() - bar_w / 2
+            bh = v / max_h * rect.height()
+            y  = rect.bottom() - bh
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(colour))
+            p.drawRoundedRect(QRectF(x, y, bar_w, bh), 2, 2)
+
+        # X labels every 4 hours
+        p.setFont(_font(8))
+        p.setPen(QColor(MUTED))
+        for h in range(0, 24, 4):
+            x = rect.x() + (h + 0.5) / 24 * rect.width()
+            p.drawText(QRectF(x - 12, rect.bottom() + 3, 24, 14),
+                       Qt.AlignCenter, f"{h:02d}")
+
+        self._draw_y_labels(p, rect, ticks, max_h)
+
+
+class CumulativePaceChart(_TaskChart):
+    """Cumulative hours line + dashed goal trajectory (if goal set)."""
+
+    _PAD = (20, 16, 40, 56)
+
+    def __init__(self, parent=None):
+        super().__init__(fixed_height=220, parent=parent)
+
+    def _paint(self, p: QPainter) -> None:
+        ts   = self._task_stats
+        days = date_range(ts.start, ts.end)
+        if not days:
+            self._draw_no_data(p)
+            return
+
+        cumul   = ts.cumulative_hours_by_date(days)
+        goal_h  = ts.task.goal_hours
+        max_h   = max(cumul[-1] if cumul else 0.0, goal_h if goal_h > 0 else 0.0, 0.01)
+        max_h  *= 1.1
+        ticks   = _nice_ticks(max_h)
+        rect    = self._plot_rect()
+        n       = len(days)
+        colour  = ts.task.colour
+
+        self._draw_h_grid(p, rect, ticks, max_h)
+        self._draw_axes(p, rect)
+
+        def px(i: int) -> float:
+            if n == 1:
+                return rect.x() + rect.width() / 2
+            return rect.x() + i / (n - 1) * rect.width()
+
+        def py(h: float) -> float:
+            return rect.bottom() - h / max_h * rect.height()
+
+        # Goal dashed line
+        if goal_h > 0:
+            pen = QPen(QColor(FAINT), 1, Qt.DashLine)
+            p.setPen(pen)
+            p.drawLine(QPointF(px(0), py(0)), QPointF(px(n - 1), py(goal_h)))
+
+        # Actual cumulative line
+        pen2 = QPen(QColor(colour), 2, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+        p.setPen(pen2)
+        pts = [QPointF(px(i), py(h)) for i, h in enumerate(cumul)]
+        for i in range(1, len(pts)):
+            p.drawLine(pts[i - 1], pts[i])
+
+        # End-point dot
+        if pts:
+            p.setBrush(QColor(colour))
+            p.setPen(Qt.NoPen)
+            lp = pts[-1]
+            p.drawEllipse(QRectF(lp.x() - 4, lp.y() - 4, 8, 8))
+
+        self._draw_y_labels(p, rect, ticks, max_h)
+        self._draw_x_date_labels(p, rect, days)
+
+        # ETA / completion label (top-right corner)
+        if goal_h > 0 and cumul:
+            done_h    = cumul[-1]
+            remaining = goal_h - done_h
+            if remaining <= 0:
+                p.setFont(_font(9, bold=True))
+                p.setPen(QColor(SUCCESS))
+                p.drawText(QRectF(rect.right() - 130, rect.top(), 130, 20),
+                           Qt.AlignRight | Qt.AlignVCenter, "Goal reached! ✓")
+            else:
+                days_elapsed = max(1, (ts.end - ts.start).days + 1)
+                hpd = done_h / days_elapsed
+                if hpd > 0:
+                    from datetime import timedelta as _td
+                    eta_date = ts.end + _td(days=int(remaining / hpd))
+                    eta_str = eta_date.strftime("%d %b %Y")
+                    on_track = (
+                        ts.task.goal_deadline is not None
+                        and eta_date.date() <= ts.task.goal_deadline
+                    )
+                    col = SUCCESS if on_track else WARNING
+                    p.setFont(_font(9))
+                    p.setPen(QColor(col))
+                    p.drawText(QRectF(rect.right() - 150, rect.top(), 150, 20),
+                               Qt.AlignRight | Qt.AlignVCenter,
+                               f"ETA {eta_str}")

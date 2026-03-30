@@ -195,6 +195,119 @@ class GoalTracker:
 
 
 # ──────────────────────────────────────────────────────────
+# Per-task session stats
+# ──────────────────────────────────────────────────────────
+class TaskSessionStats:
+    """All aggregations scoped to a single task within a date range."""
+
+    def __init__(self, task: Task, start: date, end: date):
+        self.task   = task
+        self.start  = start
+        self.end    = end
+        self.sessions = task.sessions_in_range(start, end)
+        self.closed   = [s for s in self.sessions if not s.is_open]
+        self.session_durations: list[float] = [s.duration_seconds for s in self.closed]
+
+        self.daily_seconds: dict[date, float] = defaultdict(float)
+        for s in self.sessions:
+            self.daily_seconds[s.date] += s.duration_seconds
+
+        self.hour_seconds: dict[int, float] = defaultdict(float)
+        for s in self.sessions:
+            self.hour_seconds[s.hour] += s.duration_seconds
+
+    @property
+    def total_seconds(self) -> float:
+        return sum(self.session_durations)
+
+    @property
+    def session_count(self) -> int:
+        return len(self.closed)
+
+    @property
+    def avg_session_seconds(self) -> float:
+        if not self.closed:
+            return 0.0
+        return self.total_seconds / len(self.closed)
+
+    def session_length_buckets(self, bucket_min: int = 15) -> dict[int, int]:
+        """Returns {bucket_start_minutes: count} histogram."""
+        buckets: dict[int, int] = defaultdict(int)
+        for sec in self.session_durations:
+            m = int(sec / 60)
+            bucket = (m // bucket_min) * bucket_min
+            buckets[bucket] += 1
+        return dict(sorted(buckets.items()))
+
+    def cumulative_hours_by_date(self, dates: list[date]) -> list[float]:
+        """Running total of hours up to each date."""
+        cumul = 0.0
+        result = []
+        for d in dates:
+            cumul += self.daily_seconds.get(d, 0.0) / 3600
+            result.append(cumul)
+        return result
+
+
+# ──────────────────────────────────────────────────────────
+# Category insights helper
+# ──────────────────────────────────────────────────────────
+def category_insights(category: str, tasks: list[Task],
+                      stats: RangeStats) -> list[Insight]:
+    """Produce a short list of Insight objects scoped to one category."""
+    insights: list[Insight] = []
+    cat_tasks = [t for t in tasks if t.tag == category]
+    if not cat_tasks:
+        return insights
+
+    # Top task by hours in range
+    top = max(cat_tasks, key=lambda t: stats.task_seconds.get(t.name, 0), default=None)
+    if top and stats.task_seconds.get(top.name, 0) > 0:
+        insights.append(Insight(
+            "🏆", "Top task",
+            top.name[:20],
+            fmt_dur(stats.task_seconds[top.name], short=True) + " in range",
+            "positive",
+        ))
+
+    # Category total vs last week
+    try:
+        comp_tw = RangeStats(cat_tasks, *this_week_range())
+        comp_lw = RangeStats(cat_tasks, *last_week_range())
+        delta = comp_tw.grand_total_seconds - comp_lw.grand_total_seconds
+        sign  = "+" if delta >= 0 else "−"
+        senti = "positive" if delta > 0 else ("negative" if delta < -900 else "neutral")
+        insights.append(Insight(
+            "📈" if delta >= 0 else "📉",
+            "vs last week",
+            f"{sign}{fmt_dur(abs(delta), short=True)}",
+            f"this week: {fmt_dur(comp_tw.grand_total_seconds, short=True)}",
+            senti,
+        ))
+    except Exception:
+        pass
+
+    # Most active hour within category
+    if stats.by_hour:
+        cat_names = {t.name for t in cat_tasks}
+        hour_totals = {
+            h: sum(v for k, v in secs.items() if k in cat_names)
+            for h, secs in stats.by_hour.items()
+        }
+        if hour_totals:
+            peak_h = max(hour_totals, key=hour_totals.__getitem__)
+            if hour_totals[peak_h] > 0:
+                insights.append(Insight(
+                    "⏰", "Peak hour",
+                    f"{peak_h:02d}:00–{peak_h+1:02d}:00",
+                    fmt_dur(hour_totals[peak_h] / max(1, stats.n_days), short=True) + " avg/day",
+                    "neutral",
+                ))
+
+    return insights
+
+
+# ──────────────────────────────────────────────────────────
 # Streak
 # ──────────────────────────────────────────────────────────
 def streak_days(tasks: list[Task], end_date: Optional[date] = None) -> int:

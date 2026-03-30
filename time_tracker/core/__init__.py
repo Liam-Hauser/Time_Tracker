@@ -4,6 +4,7 @@ from .db_store import DBStore
 from .analytics import (
     RangeStats, WeeklyComparison, GoalTracker,
     InsightEngine, Insight, streak_days,
+    TaskSessionStats, category_insights,
     date_range, this_week_range, last_week_range,
     this_month_range, last_month_range, last_n_days,
 )

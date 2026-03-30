@@ -1,5 +1,6 @@
 """
 ui/theme.py — Design tokens.  Linear/Vercel-inspired dark palette.
+Supports dark / light mode toggle via set_dark_mode() / set_light_mode().
 No matplotlib dependency.
 """
 
@@ -50,3 +51,56 @@ CHART_PALETTE = [
     "#38BDF8", "#FB7185", "#34D399", "#FBBF24", "#A78BFA",
     "#60A5FA", "#F472B6",
 ]
+
+# ── Theme toggle ─────────────────────────────────────────
+
+IS_DARK: bool = True
+
+_DARK_PALETTE: dict = dict(
+    BG="#0d0d0d", BG2="#141414", BG3="#1c1c1c", BG4="#242424",
+    BORDER="#2a2a2a", BORDER2="#3d3d3d",
+    TEXT="#ededed", MUTED="#737373", FAINT="#383838",
+)
+
+_LIGHT_PALETTE: dict = dict(
+    BG="#f4f5f7", BG2="#ffffff", BG3="#f0f1f3", BG4="#e8e9eb",
+    BORDER="#e2e3e5", BORDER2="#c8c9cb",
+    TEXT="#111827", MUTED="#6b7280", FAINT="#d1d5db",
+)
+
+
+def set_dark_mode() -> None:
+    """Switch all surface/text tokens to the dark palette and rebuild consumers."""
+    import sys
+    global IS_DARK
+    IS_DARK = True
+    mod = sys.modules[__name__]
+    for k, v in _DARK_PALETTE.items():
+        setattr(mod, k, v)
+    _propagate_to_consumers()
+
+
+def set_light_mode() -> None:
+    """Switch all surface/text tokens to the light palette and rebuild consumers."""
+    import sys
+    global IS_DARK
+    IS_DARK = False
+    mod = sys.modules[__name__]
+    for k, v in _LIGHT_PALETTE.items():
+        setattr(mod, k, v)
+    _propagate_to_consumers()
+
+
+def _propagate_to_consumers() -> None:
+    """Push updated theme constants into consumer modules that used
+    ``from .theme import X`` so they pick up the new values immediately."""
+    import sys
+    src = sys.modules[__name__]
+    _keys = set(_DARK_PALETTE.keys())
+    for mod_name in list(sys.modules):
+        if "time_tracker" not in mod_name:
+            continue
+        mod = sys.modules[mod_name]
+        for k in _keys:
+            if hasattr(mod, k) and not callable(getattr(mod, k)):
+                setattr(mod, k, getattr(src, k))

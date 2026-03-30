@@ -46,7 +46,7 @@ class DBStore:
             tasks: list[Task] = []
 
             for db_task in db_tasks:
-                tag = (db_task.category or "none").lower()
+                tag = db_task.category or "none"
                 idx = tag_counters.get(tag, 0)
                 tag_counters[tag] = idx + 1
 
@@ -97,6 +97,55 @@ class DBStore:
                 count  = db.query(DBTask).filter_by(category=category).count()
                 colour = colour_for_tag(colour_tag, count)
                 db.add(DBTask(name=name, category=category, color=colour))
+                db.commit()
+
+    # ── Task editing ─────────────────────────────────────────
+
+    def rename_task(self, task_id: int, new_name: str) -> None:
+        from database.db import SessionLocal
+        from database.models import Task as DBTask, Goal as DBGoal
+
+        with self._lock:
+            with SessionLocal() as db:
+                if db.query(DBTask).filter_by(name=new_name).first():
+                    raise ValueError(f"A task named '{new_name}' already exists")
+                task = db.get(DBTask, task_id)
+                if task is None:
+                    raise ValueError(f"Task id {task_id} not found")
+                task.name = new_name
+                for goal in db.query(DBGoal).filter_by(tasks_id=task_id).all():
+                    goal.name = new_name
+                db.commit()
+
+    def move_task(self, task_id: int, new_category: str) -> None:
+        from database.db import SessionLocal
+        from database.models import Task as DBTask
+
+        with self._lock:
+            with SessionLocal() as db:
+                task = db.get(DBTask, task_id)
+                if task is None:
+                    raise ValueError(f"Task id {task_id} not found")
+                task.category = new_category
+                count = db.query(DBTask).filter_by(category=new_category).count()
+                colour_tag = CATEGORY_COLOUR_TAG.get(new_category, "none")
+                task.color = colour_for_tag(colour_tag, count - 1)
+                db.commit()
+
+    def delete_task(self, task_id: int) -> None:
+        from database.db import SessionLocal
+        from database.models import (
+            Task as DBTask, CurrentClock, HistoricClock, Goal as DBGoal,
+        )
+
+        with self._lock:
+            with SessionLocal() as db:
+                db.query(CurrentClock).filter_by(task_id=task_id).delete()
+                db.query(HistoricClock).filter_by(tasks_id=task_id).delete()
+                db.query(DBGoal).filter_by(tasks_id=task_id).delete()
+                task = db.get(DBTask, task_id)
+                if task:
+                    db.delete(task)
                 db.commit()
 
     # ── Categories ───────────────────────────────────────────
@@ -222,3 +271,51 @@ class DBStore:
                 ))
                 db.delete(cc)
                 db.commit()
+
+    # ── Session management ───────────────────────────────────
+
+    def add_session(self, task_id: int,
+                    start_dt: datetime, end_dt: datetime) -> None:
+        """Insert a manually-logged historic session."""
+        from database.db import SessionLocal
+        from database.models import HistoricClock
+        total_sec = int((end_dt - start_dt).total_seconds())
+        with self._lock:
+            with SessionLocal() as db:
+                db.add(HistoricClock(
+                    tasks_id=task_id,
+                    total_sec=total_sec,
+                    start_time=start_dt,
+                    end_time=end_dt,
+                ))
+                db.commit()
+
+    def update_session(self, session_id: int,
+                       new_start: datetime, new_end: datetime) -> None:
+        """Update start/end times of a HistoricClock record."""
+        from database.db import SessionLocal
+        from database.models import HistoricClock
+        with self._lock:
+            with SessionLocal() as db:
+                hc = db.get(HistoricClock, session_id)
+                if hc is None:
+                    raise ValueError(f"Session {session_id} not found")
+                hc.start_time = new_start
+                hc.end_time   = new_end
+                hc.total_sec  = int((new_end - new_start).total_seconds())
+                db.commit()
+
+    def delete_session(self, session_id: int, is_open: bool = False) -> None:
+        """Delete a clock record (HistoricClock or CurrentClock)."""
+        from database.db import SessionLocal
+        from database.models import HistoricClock, CurrentClock
+        with self._lock:
+            with SessionLocal() as db:
+                rec = (
+                    db.get(CurrentClock, session_id)
+                    if is_open
+                    else db.get(HistoricClock, session_id)
+                )
+                if rec:
+                    db.delete(rec)
+                    db.commit()
