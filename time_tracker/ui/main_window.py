@@ -5,22 +5,20 @@ ui/main_window.py — Top-level application window.
 from __future__ import annotations
 import traceback
 from datetime import date, datetime
-from pathlib import Path
 from typing import Optional
 
 from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QObject, QDate
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QPushButton, QLineEdit, QFileDialog, QScrollArea,
-    QFrame, QSplitter, QGridLayout, QMessageBox,
-    QDoubleSpinBox, QFormLayout, QDialog, QDialogButtonBox,
-    QSizePolicy, QDateEdit, QTableWidget, QTableWidgetItem,
-    QHeaderView, QAbstractItemView,
+    QLabel, QPushButton, QScrollArea,
+    QFrame, QSplitter, QMessageBox,
+    QDoubleSpinBox, QDialog, QDialogButtonBox,
+    QDateEdit, QLineEdit, QComboBox,
 )
 from PyQt5.QtGui import QColor, QPalette
 
 from ..core import (
-    VaultParser, VaultWriter, ParseResult, RangeStats,
+    DBStore, ParseResult, RangeStats,
     WeeklyComparison, GoalTracker, InsightEngine, Insight, streak_days,
     GoalSpec,
     date_range, this_week_range, last_week_range,
@@ -42,8 +40,6 @@ from .theme import (
     PAD_XS, PAD_SM, PAD_MD, PAD_LG,
 )
 
-DEFAULT_PATH = Path(r"C:\Users\liamh\Desktop\general_vault_0\Time Tracking\2026-Q1.md")
-
 
 # ──────────────────────────────────────────────────────────
 # Background reload worker
@@ -53,15 +49,18 @@ class ReloadWorker(QObject):
     done  = pyqtSignal()
     error = pyqtSignal(str)
 
-    def __init__(self, path: Path, parser: VaultParser):
+    def __init__(self, store: DBStore):
         super().__init__()
-        self._path   = path
-        self._parser = parser
-        self.result: Optional[ParseResult] = None
+        self._store = store
+        self.result:     Optional[ParseResult]       = None
+        self.goals:      Optional[dict]              = None
+        self.categories: list[tuple[str, str]]       = []
 
     def run(self) -> None:
         try:
-            self.result = self._parser.parse(self._path)
+            self.result     = self._store.load()
+            self.goals      = self._store.load_goals()
+            self.categories = self._store.load_categories()
             self.done.emit()
         except Exception:
             self.error.emit(traceback.format_exc())
@@ -209,6 +208,145 @@ class GoalDialog(QDialog):
 
 
 # ──────────────────────────────────────────────────────────
+# New task dialog
+# ──────────────────────────────────────────────────────────
+
+# Middle shade for each TAG_PALETTES entry, used as swatch colour.
+_PALETTE_SWATCHES: dict[str, str] = {
+    "blue":   "#185FA5",
+    "red":    "#DC3912",
+    "yellow": "#FF9900",
+    "green":  "#639922",
+    "purple": "#7F77DD",
+    "brown":  "#8B6C42",
+    "white":  "#AAAAAA",
+    "black":  "#444444",
+}
+
+_COMBO_CSS = (
+    f"QComboBox {{ background: {BG3}; color: {TEXT};"
+    f" border: 1px solid {BORDER}; border-radius: 5px;"
+    f" padding: 4px 10px; font-size: 11px; }}"
+    f" QComboBox::drop-down {{ border: none; }}"
+    f" QComboBox QAbstractItemView {{ background: {BG2};"
+    f" color: {TEXT}; selection-background-color: {ACCENT}; }}"
+)
+
+_INPUT_CSS = (
+    f"QLineEdit {{ background: {BG3}; color: {TEXT};"
+    f" border: 1px solid {BORDER}; border-radius: 5px;"
+    f" padding: 4px 10px; font-size: 11px; }}"
+    f" QLineEdit:focus {{ border-color: {ACCENT}; }}"
+)
+
+
+def _swatch_for_tag(colour_tag: str) -> str:
+    """Return the representative hex for a TAG_PALETTES key."""
+    from ..core.models import TAG_PALETTES
+    palette = TAG_PALETTES.get(colour_tag, TAG_PALETTES["none"])
+    return palette[1] if len(palette) > 1 else palette[0]
+
+
+class NewCategoryDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("New Category")
+        self.setFixedWidth(340)
+        self.setStyleSheet(
+            f"background: {BG}; color: {TEXT};"
+            f" QLabel {{ background: transparent; }}"
+        )
+
+        root = QVBoxLayout(self)
+        root.setSpacing(PAD_SM)
+
+        root.addWidget(label("Category name", MUTED, size=10))
+        self._name = QLineEdit()
+        self._name.setPlaceholderText("e.g. Side Projects")
+        self._name.setStyleSheet(_INPUT_CSS)
+        root.addWidget(self._name)
+
+        root.addWidget(label("Colour", MUTED, size=10))
+        self._colour = QComboBox()
+        self._colour.setStyleSheet(_COMBO_CSS)
+        for tag in _PALETTE_SWATCHES:
+            self._colour.addItem(f"● {tag}", userData=tag)
+            idx = self._colour.count() - 1
+            self._colour.setItemData(idx, QColor(_PALETTE_SWATCHES[tag]),
+                                     Qt.ForegroundRole)
+        root.addStretch()
+
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btns.setStyleSheet(f"color: {TEXT};")
+        btns.accepted.connect(self._on_accept)
+        btns.rejected.connect(self.reject)
+        root.addWidget(btns)
+
+    def _on_accept(self) -> None:
+        if not self._name.text().strip():
+            self._name.setStyleSheet(
+                _INPUT_CSS + f" QLineEdit {{ border-color: {DANGER}; }}"
+            )
+            return
+        self.accept()
+
+    def values(self) -> tuple[str, str]:
+        """Returns (category_name, colour_tag)."""
+        return self._name.text().strip(), self._colour.currentData()
+
+
+class NewTaskDialog(QDialog):
+    def __init__(self, categories: list[tuple[str, str]], parent=None):
+        """categories: list of (name, colour_tag) from the DB."""
+        super().__init__(parent)
+        self.setWindowTitle("New Task")
+        self.setFixedWidth(380)
+        self.setStyleSheet(
+            f"background: {BG}; color: {TEXT};"
+            f" QLabel {{ background: transparent; }}"
+        )
+
+        root = QVBoxLayout(self)
+        root.setSpacing(PAD_SM)
+
+        root.addWidget(label("Task name", MUTED, size=10))
+        self._name = QLineEdit()
+        self._name.setPlaceholderText("e.g. Deep work")
+        self._name.setStyleSheet(_INPUT_CSS)
+        root.addWidget(self._name)
+
+        root.addWidget(label("Category", MUTED, size=10))
+        self._category = QComboBox()
+        self._category.setStyleSheet(_COMBO_CSS)
+        for cat_name, colour_tag in categories:
+            swatch = _swatch_for_tag(colour_tag)
+            self._category.addItem(f"● {cat_name}", userData=cat_name)
+            idx = self._category.count() - 1
+            self._category.setItemData(idx, QColor(swatch), Qt.ForegroundRole)
+        root.addWidget(self._category)
+
+        root.addStretch()
+
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btns.setStyleSheet(f"color: {TEXT};")
+        btns.accepted.connect(self._on_accept)
+        btns.rejected.connect(self.reject)
+        root.addWidget(btns)
+
+    def _on_accept(self) -> None:
+        if not self._name.text().strip():
+            self._name.setStyleSheet(
+                _INPUT_CSS + f" QLineEdit {{ border-color: {DANGER}; }}"
+            )
+            return
+        self.accept()
+
+    def values(self) -> tuple[str, str]:
+        """Returns (task_name, category_name)."""
+        return self._name.text().strip(), self._category.currentData()
+
+
+# ──────────────────────────────────────────────────────────
 # Main window
 # ──────────────────────────────────────────────────────────
 
@@ -218,12 +356,11 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Time Tracker")
         self.resize(1600, 960)
 
-        self._parser = VaultParser()
-        self._writer = VaultWriter()
-        self._path   = DEFAULT_PATH
-        self._result: Optional[ParseResult]  = None
-        self._goals:  dict[str, GoalSpec]    = {}
-        self._task_rows: dict[str, TaskRow]  = {}
+        self._store      = DBStore()
+        self._result:     Optional[ParseResult]  = None
+        self._goals:      dict[str, GoalSpec]    = {}
+        self._categories: list[tuple[str, str]]  = []
+        self._task_rows:  dict[str, TaskRow]     = {}
 
         self._date_low  = 0
         self._date_high = 0
@@ -298,22 +435,13 @@ class MainWindow(QMainWindow):
         )
         lay.addWidget(logo)
         lay.addWidget(v_line())
-        lay.addWidget(label("vault", MUTED, size=10))
+        lay.addWidget(label("PostgreSQL", MUTED, size=10))
+        lay.addStretch()
 
-        self._path_edit = QLineEdit(str(self._path))
-        self._path_edit.setStyleSheet(
-            f"QLineEdit {{ background: {BG3}; color: {TEXT};"
-            f" border: 1px solid {BORDER}; border-radius: 5px;"
-            f" padding: 2px 10px; font-size: 10px; }}"
-            f" QLineEdit:focus {{ border-color: {ACCENT}; }}"
-        )
-        self._path_edit.setMinimumWidth(360)
-        self._path_edit.returnPressed.connect(self._on_path_changed)
-        lay.addWidget(self._path_edit, stretch=1)
-
-        for txt, slot in [("Browse…",  self._on_browse),
-                          ("Reload",   self._trigger_reload),
-                          ("Goals…",   self._on_edit_goals)]:
+        for txt, slot in [("+ New Task",      self._on_new_task),
+                          ("+ New Category",  self._on_new_category),
+                          ("Reload",          self._trigger_reload),
+                          ("Goals…",          self._on_edit_goals)]:
             lay.addWidget(self._mk_btn(txt, slot))
 
         self._updated_lbl = label("Loading…", FAINT, size=9)
@@ -456,7 +584,7 @@ class MainWindow(QMainWindow):
         if self._thread and self._thread.isRunning():
             return
         self._thread = QThread(self)
-        self._worker = ReloadWorker(self._path, self._parser)
+        self._worker = ReloadWorker(self._store)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
         self._worker.done.connect(self._on_worker_done)
@@ -467,6 +595,10 @@ class MainWindow(QMainWindow):
 
     def _on_worker_done(self) -> None:
         if self._worker and self._worker.result:
+            if self._worker.goals is not None:
+                self._goals = self._worker.goals
+            if self._worker.categories:
+                self._categories = self._worker.categories
             self._on_reload_done(self._worker.result)
 
     def _on_reload_done(self, result: ParseResult) -> None:
@@ -492,7 +624,7 @@ class MainWindow(QMainWindow):
 
     def _on_reload_error(self, msg: str) -> None:
         self._updated_lbl.setText("Error — see console")
-        QMessageBox.critical(self, "Failed to load vault", msg)
+        QMessageBox.critical(self, "Failed to load data", msg)
 
     def _apply_goals_to_tasks(self) -> None:
         if not self._result:
@@ -648,7 +780,7 @@ class MainWindow(QMainWindow):
         if not self._result:
             return
         try:
-            self._writer.clock_in(self._path, task_name, self._result)
+            self._store.clock_in(task_name, self._result)
         except Exception as e:
             QMessageBox.warning(self, "Clock-in failed", str(e))
             return
@@ -658,7 +790,7 @@ class MainWindow(QMainWindow):
         if not self._result:
             return
         try:
-            self._writer.clock_out(self._path, task_name, self._result)
+            self._store.clock_out(task_name, self._result)
         except Exception as e:
             QMessageBox.warning(self, "Clock-out failed", str(e))
             return
@@ -708,32 +840,51 @@ class MainWindow(QMainWindow):
         self._date_low, self._date_high = low, high
         self._refresh_all()
 
-    # ── File controls ────────────────────────────────────
+    # ── New task ─────────────────────────────────────────
 
-    def _on_path_changed(self) -> None:
-        self._path = Path(self._path_edit.text().strip())
+    def _on_new_task(self) -> None:
+        if not self._categories:
+            QMessageBox.information(self, "No categories",
+                                    "Create a category first with '+ New Category'.")
+            return
+        dlg = NewTaskDialog(self._categories, parent=self)
+        if dlg.exec_() != QDialog.Accepted:
+            return
+        name, category = dlg.values()
+        try:
+            self._store.create_task(name, category)
+        except Exception as e:
+            QMessageBox.warning(self, "Failed to create task", str(e))
+            return
         self._trigger_reload()
 
-    def _on_browse(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Select vault file", str(self._path),
-            "Markdown files (*.md);;All files (*)",
-        )
-        if path:
-            self._path = Path(path)
-            self._path_edit.setText(path)
-            self._trigger_reload()
+    def _on_new_category(self) -> None:
+        dlg = NewCategoryDialog(parent=self)
+        if dlg.exec_() != QDialog.Accepted:
+            return
+        cat_name, colour_tag = dlg.values()
+        try:
+            self._store.create_category(cat_name, colour_tag)
+        except Exception as e:
+            QMessageBox.warning(self, "Failed to create category", str(e))
+            return
+        # Refresh categories immediately so the next NewTaskDialog sees it
+        self._categories = self._store.load_categories()
 
     # ── Goals ────────────────────────────────────────────
 
     def _on_edit_goals(self) -> None:
         if not self._result:
-            QMessageBox.information(self, "Goals", "Load a vault file first.")
+            QMessageBox.information(self, "Goals", "No data loaded yet.")
             return
         dlg = GoalDialog(self._result.tasks, self._goals, parent=self)
         dlg.resize(600, 500)
         if dlg.exec_() == QDialog.Accepted:
             self._goals = dlg.get_goals()
+            try:
+                self._store.save_goals(self._goals, self._result.tasks)
+            except Exception as e:
+                QMessageBox.warning(self, "Failed to save goals", str(e))
             self._apply_goals_to_tasks()
             self._rebuild_goal_rows()
 

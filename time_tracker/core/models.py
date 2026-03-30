@@ -24,6 +24,15 @@ TAG_PALETTES: dict[str, list[str]] = {
     "none":   ["#5F5E5A", "#888780", "#B4B2A9"],
 }
 
+# Maps human-readable category names to their colour tag in TAG_PALETTES.
+CATEGORY_COLOUR_TAG: dict[str, str] = {
+    "Mathematics":       "blue",
+    "EOR":               "red",
+    "Personal Projects": "yellow",
+    "Personal Growth":   "white",
+    "Interview Prep":    "purple",
+}
+
 
 def colour_for_tag(tag: str, index: int) -> str:
     palette = TAG_PALETTES.get(tag, TAG_PALETTES["none"])

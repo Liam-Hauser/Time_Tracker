@@ -1,2 +1,6 @@
 PyQt5
 numpy
+python-dotenv
+sqlalchemy
+psycopg2-binary
+alembic

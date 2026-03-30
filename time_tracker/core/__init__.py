@@ -1,5 +1,6 @@
 from .models import Task, Session, GoalSpec, fmt_dur, fmt_dt, parse_dt, TAG_PALETTES
-from .parser import VaultParser, VaultWriter, ParseResult
+from .parser import ParseResult
+from .db_store import DBStore
 from .analytics import (
     RangeStats, WeeklyComparison, GoalTracker,
     InsightEngine, Insight, streak_days,
