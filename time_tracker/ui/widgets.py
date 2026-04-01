@@ -166,7 +166,7 @@ class InsightStrip(QWidget):
 class ChartPanel(QWidget):
     def __init__(self, title: str, parent=None):
         super().__init__(parent)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -198,8 +198,6 @@ class ChartPanel(QWidget):
 
     def add_widget(self, w: QWidget) -> None:
         self._cl.addWidget(w)
-        # Mirror the chart's fixed height into the panel
-        w.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
 
 # ──────────────────────────────────────────────────────────
@@ -679,16 +677,104 @@ class GoalRow(QWidget):
 # Session table  (per-task tab)
 # ──────────────────────────────────────────────────────────
 
+class _SessionRow(QWidget):
+    """Single session row with a hover-revealed Edit button."""
+
+    edit_requested   = pyqtSignal(int, object, object)
+    delete_requested = pyqtSignal(int, bool)
+
+    def __init__(self, session_id: int, is_open: bool,
+                 start, end, dur_str: str, parent=None):
+        super().__init__(parent)
+        self._id      = session_id
+        self._is_open = is_open
+        self._start   = start
+        self._end     = end
+
+        self.setObjectName("SessRow")
+        self.setStyleSheet(
+            f"#SessRow {{ border-bottom: 1px solid {BORDER};"
+            f" background: transparent; }}"
+            f"#SessRow:hover {{ background: {BG3}; }}"
+        )
+        self.setAttribute(Qt.WA_Hover, True)
+
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(8, 5, 8, 5)
+        lay.setSpacing(0)
+
+        def _cell(text: str, width: int, colour: str = TEXT) -> QLabel:
+            lbl = QLabel(text)
+            lbl.setFixedWidth(width)
+            lbl.setStyleSheet(
+                f"color: {colour}; font-size: 11px;"
+                f" background: transparent; border: none;"
+            )
+            return lbl
+
+        lay.addWidget(_cell(start.strftime("%Y-%m-%d"), 108))
+        lay.addWidget(_cell(start.strftime("%H:%M"), 72))
+        end_str = end.strftime("%H:%M") if end else "—"
+        lay.addWidget(_cell(end_str, 72, TEXT if end else MUTED))
+
+        dur_lbl = QLabel(dur_str)
+        dur_lbl.setStyleSheet(
+            f"color: {MUTED}; font-size: 11px;"
+            f" background: transparent; border: none;"
+        )
+        lay.addWidget(dur_lbl, stretch=1)
+
+        # Action buttons — hidden until hover
+        self._edit_btn = QPushButton("Edit")
+        self._edit_btn.setFixedSize(46, 22)
+        self._edit_btn.setStyleSheet(
+            f"QPushButton {{ background: transparent; color: {MUTED};"
+            f" border: 1px solid {BORDER}; border-radius: 4px;"
+            f" font-size: 10px; }}"
+            f" QPushButton:hover {{ color: {TEXT}; background: {BG4};"
+            f" border-color: {BORDER2}; }}"
+        )
+        self._edit_btn.setVisible(False)
+        if not is_open:
+            self._edit_btn.clicked.connect(
+                lambda: self.edit_requested.emit(self._id, self._start, self._end)
+            )
+        lay.addWidget(self._edit_btn)
+
+        self._del_btn = QPushButton("Delete")
+        self._del_btn.setFixedSize(54, 22)
+        self._del_btn.setStyleSheet(
+            f"QPushButton {{ background: transparent; color: {DANGER};"
+            f" border: 1px solid {DANGER}; border-radius: 4px;"
+            f" font-size: 10px; }}"
+            f" QPushButton:hover {{ background: {DANGER_DIM}; }}"
+        )
+        self._del_btn.setVisible(False)
+        self._del_btn.clicked.connect(
+            lambda: self.delete_requested.emit(self._id, self._is_open)
+        )
+        lay.addWidget(self._del_btn)
+
+    def enterEvent(self, e) -> None:
+        if not self._is_open:
+            self._edit_btn.setVisible(True)
+        self._del_btn.setVisible(True)
+        super().enterEvent(e)
+
+    def leaveEvent(self, e) -> None:
+        self._edit_btn.setVisible(False)
+        self._del_btn.setVisible(False)
+        super().leaveEvent(e)
+
+
 class SessionTable(QWidget):
-    """Scrollable, sortable table of sessions for a single task.
+    """Scrollable list of session rows for a single task.
 
     Signals
     -------
     edit_requested(int, object, object)  — session_id, start datetime, end datetime
     delete_requested(int, bool)          — session_id, is_open
     """
-
-    COLUMNS = ["Date", "Start", "End", "Duration"]
 
     edit_requested   = pyqtSignal(int, object, object)
     delete_requested = pyqtSignal(int, bool)
@@ -698,43 +784,60 @@ class SessionTable(QWidget):
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setMinimumHeight(200)
 
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        self._table = QTableWidget(0, 4)
-        self._table.setHorizontalHeaderLabels(self.COLUMNS)
-        self._table.horizontalHeader().setStretchLastSection(True)
-        self._table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.Interactive)
-        self._table.verticalHeader().setVisible(False)
-        self._table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self._table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self._table.setSortingEnabled(True)
-        self._table.setShowGrid(False)
-        self._table.setAlternatingRowColors(True)
-        self._table.setStyleSheet(
-            f"QTableWidget {{ background: {BG2}; color: {TEXT};"
-            f" border: none; font-size: 11px; gridline-color: {BORDER}; }}"
-            f" QTableWidget::item {{ padding: 4px 8px; border: none; }}"
-            f" QTableWidget::item:alternate {{ background: {BG}; }}"
-            f" QTableWidget::item:selected {{ background: {ACCENT_DIM}; color: {TEXT}; }}"
-            f" QHeaderView::section {{ background: {BG3}; color: {MUTED};"
-            f" font-size: 10px; padding: 4px 8px; border: none;"
-            f" border-bottom: 1px solid {BORDER}; }}"
+        # Header row
+        hdr = QFrame()
+        hdr.setFixedHeight(28)
+        hdr.setStyleSheet(
+            f"QFrame {{ background: {BG3}; border-bottom: 1px solid {BORDER}; }}"
         )
-        # Initial column widths
-        self._table.setColumnWidth(0, 110)
-        self._table.setColumnWidth(1, 75)
-        self._table.setColumnWidth(2, 75)
-        # Store context menu on the inner table
-        self._table.setContextMenuPolicy(Qt.CustomContextMenu)
-        self._table.customContextMenuRequested.connect(self._on_context_menu)
-        lay.addWidget(self._table)
+        hl = QHBoxLayout(hdr)
+        hl.setContentsMargins(8, 0, 8, 0)
+        hl.setSpacing(0)
+        for txt, w in [("Date", 108), ("Start", 72), ("End", 72)]:
+            lbl = QLabel(txt)
+            lbl.setFixedWidth(w)
+            lbl.setStyleSheet(
+                f"color: {MUTED}; font-size: 10px;"
+                f" background: transparent; border: none;"
+            )
+            hl.addWidget(lbl)
+        dur_hdr = QLabel("Duration")
+        dur_hdr.setStyleSheet(
+            f"color: {MUTED}; font-size: 10px;"
+            f" background: transparent; border: none;"
+        )
+        hl.addWidget(dur_hdr, stretch=1)
+        root.addWidget(hdr)
+
+        # Scrollable rows
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet(
+            f"QScrollArea {{ border: none; background: {BG2}; }}"
+            f"QScrollBar:vertical {{ background: {BG2}; width: 4px; }}"
+            f"QScrollBar::handle:vertical {{ background: {BORDER}; border-radius: 2px; }}"
+            f"QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}"
+        )
+        self._container = QWidget()
+        self._container.setStyleSheet(f"background: {BG2};")
+        self._list_lay = QVBoxLayout(self._container)
+        self._list_lay.setContentsMargins(0, 0, 0, 0)
+        self._list_lay.setSpacing(0)
+        self._list_lay.addStretch()
+        scroll.setWidget(self._container)
+        root.addWidget(scroll)
 
     def refresh(self, task, start, end) -> None:
         from ..core.models import fmt_dur
-        self._table.setSortingEnabled(False)
-        self._table.setRowCount(0)
+        # Remove all existing rows (keep trailing stretch)
+        while self._list_lay.count() > 1:
+            item = self._list_lay.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
 
         sessions = sorted(
             task.sessions_in_range(start, end),
@@ -742,58 +845,16 @@ class SessionTable(QWidget):
             reverse=True,
         )
         for s in sessions:
-            row = self._table.rowCount()
-            self._table.insertRow(row)
-            # Date — ISO string for correct sort
-            date_item = QTableWidgetItem(s.start.strftime("%Y-%m-%d"))
-            # Store session metadata in first column item
-            date_item.setData(Qt.UserRole, {
-                "id":      s.line_index,
-                "is_open": s.is_open,
-                "start":   s.start,
-                "end":     s.end,
-            })
-            self._table.setItem(row, 0, date_item)
-            self._table.setItem(row, 1, QTableWidgetItem(
-                s.start.strftime("%H:%M")))
-            end_str = s.end.strftime("%H:%M") if s.end else "—"
-            self._table.setItem(row, 2, QTableWidgetItem(end_str))
-            self._table.setItem(row, 3, QTableWidgetItem(
-                fmt_dur(s.duration_seconds, short=True)))
-
-        self._table.setSortingEnabled(True)
-
-    def _on_context_menu(self, pos) -> None:
-        row = self._table.rowAt(pos.y())
-        if row < 0:
-            return
-        item = self._table.item(row, 0)
-        if item is None:
-            return
-        meta = item.data(Qt.UserRole)
-        if not meta:
-            return
-
-        menu = QMenu(self)
-        menu.setStyleSheet(
-            f"QMenu {{ background: {BG2}; color: {TEXT};"
-            f" border: 1px solid {BORDER}; padding: 2px; }}"
-            f" QMenu::item {{ padding: 5px 20px 5px 12px; }}"
-            f" QMenu::item:selected {{ background: {BG3}; }}"
-        )
-
-        if not meta["is_open"]:
-            menu.addAction("Edit session…").triggered.connect(
-                lambda: self.edit_requested.emit(
-                    meta["id"], meta["start"], meta["end"]
-                )
+            row = _SessionRow(
+                session_id=s.line_index,
+                is_open=s.is_open,
+                start=s.start,
+                end=s.end,
+                dur_str=fmt_dur(s.duration_seconds, short=True),
             )
-        del_act = menu.addAction("Delete session…")
-        del_act.setStyleSheet(f"color: {DANGER};")
-        del_act.triggered.connect(
-            lambda: self.delete_requested.emit(meta["id"], meta["is_open"])
-        )
-        menu.exec_(self._table.viewport().mapToGlobal(pos))
+            row.edit_requested.connect(self.edit_requested)
+            row.delete_requested.connect(self.delete_requested)
+            self._list_lay.insertWidget(self._list_lay.count() - 1, row)
 
 
 # ──────────────────────────────────────────────────────────
@@ -833,10 +894,10 @@ class EditSessionDialog(QDialog):
             edit.setCalendarPopup(True)
             edit.setStyleSheet(_DT_CSS)
             if dt_val:
-                from PyQt5.QtCore import QDateTime as _QDT
+                from PyQt5.QtCore import QDateTime as _QDT, QDate as _QDate, QTime as _QTime
                 edit.setDateTime(_QDT(
-                    dt_val.year, dt_val.month, dt_val.day,
-                    dt_val.hour, dt_val.minute, dt_val.second,
+                    _QDate(dt_val.year, dt_val.month, dt_val.day),
+                    _QTime(dt_val.hour, dt_val.minute, dt_val.second),
                 ))
             setattr(self, attr, edit)
             root.addWidget(edit)
@@ -890,10 +951,10 @@ class AddSessionDialog(QDialog):
             edit.setDisplayFormat("yyyy-MM-dd  HH:mm:ss")
             edit.setCalendarPopup(True)
             edit.setStyleSheet(_DT_CSS)
-            from PyQt5.QtCore import QDateTime as _QDT
+            from PyQt5.QtCore import QDateTime as _QDT, QDate as _QDate, QTime as _QTime
             edit.setDateTime(_QDT(
-                dt_val.year, dt_val.month, dt_val.day,
-                dt_val.hour, dt_val.minute, dt_val.second,
+                _QDate(dt_val.year, dt_val.month, dt_val.day),
+                _QTime(dt_val.hour, dt_val.minute, dt_val.second),
             ))
             setattr(self, attr, edit)
             root.addWidget(edit)

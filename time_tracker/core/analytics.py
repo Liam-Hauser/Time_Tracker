@@ -345,15 +345,7 @@ class InsightEngine:
     def compute(self) -> list[Insight]:
         insights: list[Insight] = []
 
-        # 1 — Streak
-        s = streak_days(self._tasks)
-        if s > 0:
-            senti = "positive" if s >= 7 else "neutral"
-            insights.append(Insight("🔥", "Current streak",
-                                    f"{s} day{'s' if s != 1 else ''}",
-                                    "consecutive days logged", senti))
-
-        # 2 — Best single day in range
+        # 1 — Best single day in range
         if self._stats.total_by_day:
             best_d, best_s = max(self._stats.total_by_day.items(),
                                  key=lambda kv: kv[1])
@@ -396,23 +388,5 @@ class InsightEngine:
             from ..ui.theme import WEEKDAY_NAMES  # late import avoids cycle
             insights.append(Insight("📆", "Most active day",
                                     WEEKDAY_NAMES[wd], "", "neutral"))
-
-        # 6 — Goal pace (first task with a deadline)
-        for t in self._tasks:
-            req = t.required_daily_hours()
-            if req is None:
-                continue
-            tracker = GoalTracker(self._tasks, self._stats)
-            avg     = tracker.daily_avg_hours(t.name)
-            senti   = "positive" if avg >= req else "warning"
-            days    = t.deadline_days_left()
-            sub     = f"{days}d left" if days is not None else ""
-            insights.append(Insight(
-                "🎯", f"{t.name} goal pace",
-                f"{req:.1f}h/day needed",
-                f"avg {avg:.1f}h/day · {sub}",
-                senti,
-            ))
-            break   # show only first task with deadline
 
         return insights

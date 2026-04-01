@@ -7,7 +7,7 @@ from typing import Optional
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QScrollArea, QPushButton,
+    QWidget, QVBoxLayout, QHBoxLayout, QScrollArea, QPushButton, QSplitter,
 )
 
 from ..core.analytics import (
@@ -83,25 +83,35 @@ class CategoryTabWidget(QWidget):
         self._insight_strip = InsightStrip()
         lay.addWidget(self._insight_strip)
 
-        # Charts — same four as overview + donut
-        self._stacked_chart = StackedAreaChart()
-        lay.addWidget(make_chart_panel("Daily activity", self._stacked_chart))
+        # Charts in a resizable vertical splitter
+        vsplit = QSplitter(Qt.Vertical)
+        vsplit.setChildrenCollapsible(False)
+        vsplit.setStyleSheet(
+            f"QSplitter::handle:vertical {{ background: {BORDER}; height: 4px; margin: 1px 0; }}"
+            f"QSplitter::handle:vertical:hover {{ background: {ACCENT}; }}"
+        )
 
-        row2 = QHBoxLayout()
+        self._stacked_chart = StackedAreaChart()
+        vsplit.addWidget(make_chart_panel("Daily activity", self._stacked_chart))
+
+        row2_w = QWidget()
+        row2_w.setStyleSheet(f"background: {BG};")
+        row2 = QHBoxLayout(row2_w)
+        row2.setContentsMargins(0, 0, 0, 0)
         row2.setSpacing(PAD_SM)
         self._wd_chart = WeekdayBarChart()
         row2.addWidget(make_chart_panel("Avg by weekday", self._wd_chart))
         self._wc_chart = WeeklyCompChart()
         row2.addWidget(make_chart_panel("This week vs last week", self._wc_chart))
-        lay.addLayout(row2)
+        vsplit.addWidget(row2_w)
 
         self._hm_chart = HourHeatmap()
-        lay.addWidget(make_chart_panel("Hour-of-day heatmap", self._hm_chart))
+        vsplit.addWidget(make_chart_panel("Hour-of-day heatmap", self._hm_chart))
 
         self._pie_chart = CategoryPieChart()
-        lay.addWidget(make_chart_panel("Task breakdown", self._pie_chart))
+        vsplit.addWidget(make_chart_panel("Task breakdown", self._pie_chart))
 
-        lay.addStretch()
+        lay.addWidget(vsplit)
         scroll.setWidget(inner)
 
         outer = QVBoxLayout(self)
@@ -193,7 +203,9 @@ class TaskTabWidget(QWidget):
         dot = label("●", self._task.colour, bold=True, size=16)
         hdr.addWidget(dot)
         hdr.addWidget(label(self._task.name, TEXT, bold=True, size=15))
-        cat_badge = label(f"  {self._task.tag}  ", MUTED, size=10)
+        _tag = self._task.tag
+        _cap_tag = _tag[:1].upper() + _tag[1:] if _tag else _tag
+        cat_badge = label(f"  {_cap_tag}  ", MUTED, size=10)
         cat_badge.setStyleSheet(
             f"color: {MUTED}; font-size: 10px; background: {BG3};"
             f" border: 1px solid {BORDER}; border-radius: 4px; padding: 1px 4px;"
@@ -240,27 +252,35 @@ class TaskTabWidget(QWidget):
         session_panel = make_chart_panel("All sessions", self._session_table)
         lay.addWidget(session_panel)
 
-        # Daily bar chart (full width)
-        self._daily_chart = DailyBarChart()
-        lay.addWidget(make_chart_panel("Daily activity", self._daily_chart))
+        # Charts in a resizable vertical splitter
+        vsplit = QSplitter(Qt.Vertical)
+        vsplit.setChildrenCollapsible(False)
+        vsplit.setStyleSheet(
+            f"QSplitter::handle:vertical {{ background: {BORDER}; height: 4px; margin: 1px 0; }}"
+            f"QSplitter::handle:vertical:hover {{ background: {ACCENT}; }}"
+        )
 
-        # Two-column: histogram | time-of-day
-        row2 = QHBoxLayout()
+        self._daily_chart = DailyBarChart()
+        vsplit.addWidget(make_chart_panel("Daily activity", self._daily_chart))
+
+        row2_w = QWidget()
+        row2_w.setStyleSheet(f"background: {BG};")
+        row2 = QHBoxLayout(row2_w)
+        row2.setContentsMargins(0, 0, 0, 0)
         row2.setSpacing(PAD_SM)
         self._histogram = SessionHistogramChart()
         row2.addWidget(make_chart_panel("Session length distribution",
                                         self._histogram))
         self._tod_chart = TimeOfDayBarChart()
         row2.addWidget(make_chart_panel("Time of day", self._tod_chart))
-        lay.addLayout(row2)
+        vsplit.addWidget(row2_w)
 
-        # Pace chart (only shown when goal is set)
         self._pace_chart = CumulativePaceChart()
         self._pace_panel = make_chart_panel("Cumulative progress vs goal",
                                              self._pace_chart)
-        lay.addWidget(self._pace_panel)
+        vsplit.addWidget(self._pace_panel)
 
-        lay.addStretch()
+        lay.addWidget(vsplit)
         scroll.setWidget(inner)
 
         outer = QVBoxLayout(self)

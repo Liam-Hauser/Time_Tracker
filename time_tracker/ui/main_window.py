@@ -37,6 +37,7 @@ from .widgets import (
     EditSessionDialog, AddSessionDialog,
 )
 from .tab_widgets import CategoryTabWidget, TaskTabWidget
+from .calendar_widget import CalendarWidget
 from .theme import (
     BG, BG2, BG3, BG4, BORDER, BORDER2,
     TEXT, MUTED, FAINT, ACCENT, SUCCESS, WARNING, DANGER,
@@ -441,6 +442,7 @@ class MainWindow(QMainWindow):
         self._task_rows:   dict[str, TaskRow]             = {}
         self._category_tabs: dict[str, CategoryTabWidget] = {}
         self._task_tabs:     dict[str, TaskTabWidget]     = {}
+        self._cal_tab:       Optional[CalendarWidget]     = None
 
         self._date_low  = 0
         self._date_high = 0
@@ -519,7 +521,6 @@ class MainWindow(QMainWindow):
         lay.addStretch()
 
         for txt, slot in [("Reload",   self._trigger_reload),
-                          ("Goals…",  self._on_edit_goals),
                           ("☀ Light", self._on_toggle_theme)]:
             btn = self._mk_btn(txt, slot)
             if txt.startswith("☀"):
@@ -544,7 +545,7 @@ class MainWindow(QMainWindow):
 
         # ── Left panel (fixed 340 px) ─────────────────────
         left = QWidget()
-        left.setMinimumWidth(220)
+        left.setMinimumWidth(280)
         left.setMaximumWidth(560)
         left.setStyleSheet(f"background: {BG};")
         ll = QVBoxLayout(left)
@@ -630,13 +631,20 @@ class MainWindow(QMainWindow):
             f"QTabBar::close-button {{ image: none; }}"
         )
         self._tabs.tabCloseRequested.connect(self._on_tab_close_requested)
+        self._tabs.tabBar().tabMoved.connect(self._on_tab_moved)
         overview = self._build_overview_tab()
         self._tabs.addTab(overview, "Overview")
         # Prevent the Overview tab from being closable
         self._tabs.tabBar().setTabButton(0, self._tabs.tabBar().RightSide, None)
 
+        self._cal_tab = CalendarWidget(store=self._store)
+        self._cal_tab.reload_needed.connect(self._trigger_reload)
+        self._tabs.addTab(self._cal_tab, "Calendar")
+        # Prevent the Calendar tab from being closable
+        self._tabs.tabBar().setTabButton(1, self._tabs.tabBar().RightSide, None)
+
         splitter.addWidget(self._tabs)
-        splitter.setSizes([340, 1260])
+        splitter.setSizes([390, 1210])
         root.addWidget(splitter, stretch=1)
 
     def _build_overview_tab(self) -> QWidget:
@@ -672,28 +680,35 @@ class MainWindow(QMainWindow):
         self._insight_strip = InsightStrip()
         cl.addWidget(self._insight_strip)
 
-        # Daily stacked area (full width)
-        self._stacked_chart = StackedAreaChart()
-        cl.addWidget(make_chart_panel("Daily activity", self._stacked_chart))
+        # Chart sections in a resizable vertical splitter
+        vsplit = QSplitter(Qt.Vertical)
+        vsplit.setChildrenCollapsible(False)
+        vsplit.setStyleSheet(
+            f"QSplitter::handle:vertical {{ background: {BORDER}; height: 4px; margin: 1px 0; }}"
+            f"QSplitter::handle:vertical:hover {{ background: {ACCENT}; }}"
+        )
 
-        # Weekday + Weekly comparison side by side
-        row2 = QHBoxLayout()
+        self._stacked_chart = StackedAreaChart()
+        vsplit.addWidget(make_chart_panel("Daily activity", self._stacked_chart))
+
+        row2_w = QWidget()
+        row2_w.setStyleSheet(f"background: {BG};")
+        row2 = QHBoxLayout(row2_w)
+        row2.setContentsMargins(0, 0, 0, 0)
         row2.setSpacing(PAD_SM)
         self._wd_chart = WeekdayBarChart()
         row2.addWidget(make_chart_panel("Avg by weekday", self._wd_chart))
         self._wc_chart = WeeklyCompChart()
         row2.addWidget(make_chart_panel("This week vs last week", self._wc_chart))
-        cl.addLayout(row2)
+        vsplit.addWidget(row2_w)
 
-        # Hour heatmap (full width)
         self._hm_chart = HourHeatmap()
-        cl.addWidget(make_chart_panel("Hour-of-day heatmap", self._hm_chart))
+        vsplit.addWidget(make_chart_panel("Hour-of-day heatmap", self._hm_chart))
 
-        # Category breakdown (full width)
         self._cat_breakdown = CategoryBreakdownChart()
-        cl.addWidget(make_chart_panel("Category breakdown", self._cat_breakdown))
+        vsplit.addWidget(make_chart_panel("Category breakdown", self._cat_breakdown))
 
-        cl.addStretch()
+        cl.addWidget(vsplit)
         scroll.setWidget(right_inner)
         return scroll
 
@@ -741,6 +756,8 @@ class MainWindow(QMainWindow):
         self._rebuild_task_rows()
         self._rebuild_category_tabs()
         self._refresh_all()
+        if self._cal_tab:
+            self._cal_tab.refresh(result)
 
     def _on_reload_error(self, msg: str) -> None:
         self._updated_lbl.setText("Error — see console")
@@ -822,24 +839,35 @@ class MainWindow(QMainWindow):
                             if t.goal_hours > 0]
         if not tasks_with_goals:
             self._goals_inner_layout.addWidget(
-                label("No goals set. Click 'Goals…' above.", FAINT, size=9)
+                label("No goals set yet.", FAINT, size=9)
             )
-            return
+        else:
+            stats   = self._current_stats()
+            tracker = GoalTracker(self._result.tasks, stats) if stats else None
 
-        stats   = self._current_stats()
-        tracker = GoalTracker(self._result.tasks, stats) if stats else None
+            for t in tasks_with_goals:
+                row = GoalRow(t.name, t.colour)
+                daily_avg = tracker.daily_avg_hours(t.name) if tracker else 0
+                row.update(
+                    progress      = t.goal_progress(),
+                    goal_hours    = t.goal_hours,
+                    daily_avg     = daily_avg,
+                    req_hpd       = t.required_daily_hours(),
+                    deadline_days = t.deadline_days_left(),
+                )
+                self._goals_inner_layout.addWidget(row)
 
-        for t in tasks_with_goals:
-            row = GoalRow(t.name, t.colour)
-            daily_avg = tracker.daily_avg_hours(t.name) if tracker else 0
-            row.update(
-                progress      = t.goal_progress(),
-                goal_hours    = t.goal_hours,
-                daily_avg     = daily_avg,
-                req_hpd       = t.required_daily_hours(),
-                deadline_days = t.deadline_days_left(),
-            )
-            self._goals_inner_layout.addWidget(row)
+        # "Edit Goals…" button always at the bottom
+        edit_goals_btn = QPushButton("Edit Goals…")
+        edit_goals_btn.setFixedHeight(28)
+        edit_goals_btn.setStyleSheet(
+            f"QPushButton {{ background: transparent; color: {FAINT};"
+            f" border: 1px dashed {BORDER}; border-radius: 5px;"
+            f" font-size: 10px; margin: 4px 0px; }}"
+            f" QPushButton:hover {{ color: {MUTED}; border-color: {BORDER2}; }}"
+        )
+        edit_goals_btn.clicked.connect(self._on_edit_goals)
+        self._goals_inner_layout.addWidget(edit_goals_btn)
 
     # ── Chart refresh ────────────────────────────────────
 
@@ -1052,32 +1080,43 @@ class MainWindow(QMainWindow):
     # ── Tab management ───────────────────────────────────
 
     def _rebuild_category_tabs(self) -> None:
-        """Recreate one tab per category found in current tasks."""
-        # Remove all non-overview tabs
-        while self._tabs.count() > 1:
-            w = self._tabs.widget(1)
-            self._tabs.removeTab(1)
-            if w:
-                w.deleteLater()
+        """Recreate category tabs, preserving any open task tabs."""
+        # Remember the currently active widget so we can restore it
+        current_widget = self._tabs.currentWidget()
+
+        # Remove only the existing category tabs (leave task tabs in place)
+        for old_tab in list(self._category_tabs.values()):
+            for i in range(self._tabs.count()):
+                if self._tabs.widget(i) is old_tab:
+                    self._tabs.removeTab(i)
+                    break
+            old_tab.deleteLater()
         self._category_tabs.clear()
-        # Clear task tabs too (they'll be reopened on demand)
-        self._task_tabs.clear()
 
         if not self._result:
             return
 
+        # Insert category tabs after Overview (0) and Calendar (1), before any task tabs
+        insert_at = 2
         seen: set[str] = set()
         for t in self._result.tasks:
             if t.tag and t.tag not in seen:
                 seen.add(t.tag)
                 tab = CategoryTabWidget(t.tag, parent=self)
-                display = t.tag if len(t.tag) <= 14 else t.tag[:13] + "…"
-                self._tabs.addTab(tab, display)
-                # Prevent category tabs from being closable
-                idx = self._tabs.count() - 1
+                cap = t.tag[:1].upper() + t.tag[1:] if t.tag else t.tag
+                display = cap if len(cap) <= 14 else cap[:13] + "…"
+                self._tabs.insertTab(insert_at, tab, display)
                 self._tabs.tabBar().setTabButton(
-                    idx, self._tabs.tabBar().RightSide, None)
+                    insert_at, self._tabs.tabBar().RightSide, None)
                 self._category_tabs[t.tag] = tab
+                insert_at += 1
+
+        # Restore the previously active tab
+        if current_widget is not None:
+            for i in range(self._tabs.count()):
+                if self._tabs.widget(i) is current_widget:
+                    self._tabs.setCurrentIndex(i)
+                    return
 
     def _open_task_tab(self, task_name: str) -> None:
         """Open or focus the task detail tab for the given task."""
@@ -1093,6 +1132,9 @@ class MainWindow(QMainWindow):
         if not task:
             return
         tab = TaskTabWidget(task, parent=self)
+        tab.edit_session_requested.connect(self._on_edit_session)
+        tab.delete_session_requested.connect(self._on_delete_session)
+        tab.add_session_requested.connect(self._on_add_session)
         display = task_name if len(task_name) <= 14 else task_name[:13] + "…"
         self._tabs.addTab(tab, display)
         self._task_tabs[task_name] = tab
@@ -1112,6 +1154,14 @@ class MainWindow(QMainWindow):
             self._task_tabs.pop(w.task_name, None)
             self._tabs.removeTab(index)
             w.deleteLater()
+
+    def _on_tab_moved(self, from_idx: int, to_idx: int) -> None:
+        """Keep Overview and Calendar tabs pinned at positions 0 and 1."""
+        if from_idx <= 1 or to_idx <= 1:
+            bar = self._tabs.tabBar()
+            bar.blockSignals(True)
+            bar.moveTab(to_idx, from_idx)  # undo the move
+            bar.blockSignals(False)
 
     # ── Task editing ─────────────────────────────────────
 

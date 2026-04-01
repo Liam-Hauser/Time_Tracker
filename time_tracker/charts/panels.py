@@ -88,9 +88,14 @@ class NativeChart(QWidget):
     def __init__(self, fixed_height: int = 280, parent=None):
         super().__init__(parent)
         self._stats: Optional[RangeStats] = None
-        self.setFixedHeight(fixed_height)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._default_h = fixed_height
+        self.setMinimumHeight(fixed_height)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setAttribute(Qt.WA_OpaquePaintEvent)
+
+    def sizeHint(self):
+        from PyQt5.QtCore import QSize
+        return QSize(400, self._default_h)
 
     def _plot_rect(self) -> QRect:
         pt, pr, pb, pl = self._PAD
@@ -161,17 +166,22 @@ class NativeChart(QWidget):
 
     def _draw_legend(self, p: QPainter, tasks: list[Task],
                      x0: int, y0: int, max_w: int,
-                     font_size: int = 9) -> None:
-        """Horizontal wrapping legend."""
+                     font_size: int = 9, max_rows: int = 2) -> None:
+        """Horizontal wrapping legend, capped at max_rows."""
         f = _font(font_size)
         p.setFont(f)
         fm = QFontMetrics(f)
         DOT, GAP_TEXT, GAP_ITEM, ITEM_H = 8, 4, 16, 18
-        x, y = x0, y0
+        x, y, row = x0, y0, 0
         for task in tasks:
             name = task.name if len(task.name) <= 16 else task.name[:14] + "…"
             item_w = DOT + GAP_TEXT + fm.horizontalAdvance(name) + GAP_ITEM
             if x + item_w > x0 + max_w and x > x0:
+                row += 1
+                if row >= max_rows:
+                    p.setPen(QColor(MUTED))
+                    p.drawText(QRectF(x, y, 20, ITEM_H), Qt.AlignVCenter, "…")
+                    break
                 x = x0
                 y += ITEM_H
             p.setPen(Qt.NoPen)
@@ -196,6 +206,7 @@ class StackedAreaChart(NativeChart):
     - 7-day rolling average line (dashed, ACCENT colour)
     - Required h/day horizontal reference line (dotted, WARNING colour)
     """
+    _PAD = (20, 16, 80, 56)  # extra bottom padding for 2-row legend
 
     _PAD = (20, 16, 56, 56)   # extra bottom for legend
 
@@ -353,7 +364,7 @@ class CategoryBreakdownChart(NativeChart):
         # Resize height to fit categories
         cats = set(t.tag for t in stats.active_tasks)
         n = max(1, len(cats))
-        self.setFixedHeight(self._PAD[0] + n * 38 + self._PAD[2])
+        self.setMinimumHeight(self._PAD[0] + n * 38 + self._PAD[2])
         self.update()
 
     def _paint(self, p: QPainter) -> None:
@@ -515,7 +526,7 @@ class HourHeatmap(NativeChart):
     def refresh(self, stats: RangeStats) -> None:
         self._stats = stats
         n = len(stats.active_tasks)
-        self.setFixedHeight(max(160, self._PAD[0] + n * 30 + self._PAD[2]))
+        self.setMinimumHeight(max(160, self._PAD[0] + n * 30 + self._PAD[2]))
         self.update()
 
     def _paint(self, p: QPainter) -> None:
@@ -603,7 +614,7 @@ class WeeklyCompChart(NativeChart):
                       for t in comp.this_week.active_tasks
                                + comp.last_week.active_tasks}
         n = max(len(all_tasks), 1)
-        self.setFixedHeight(max(140, 24 + n * 36 + 16))
+        self.setMinimumHeight(max(140, 24 + n * 36 + 16))
         self.update()
 
     def refresh(self, stats: RangeStats) -> None:
@@ -1013,7 +1024,7 @@ class CumulativePaceChart(_TaskChart):
                     eta_str = eta_date.strftime("%d %b %Y")
                     on_track = (
                         ts.task.goal_deadline is not None
-                        and eta_date.date() <= ts.task.goal_deadline
+                        and eta_date <= ts.task.goal_deadline
                     )
                     col = SUCCESS if on_track else WARNING
                     p.setFont(_font(9))

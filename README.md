@@ -1,68 +1,82 @@
 # Time Tracker
 
-A PyQt5 desktop application for detailed time tracking and analytics. Time data is stored as `[clock::START--END]` annotations in an Obsidian-compatible markdown vault file, keeping records human-readable, portable, and version-controllable.
+A PyQt5 desktop application for detailed time tracking and analytics. Data is stored in PostgreSQL, managed via SQLAlchemy and Alembic.
 
 ## Features
 
-- **Task management** — Parse tasks from markdown with color tags (`#blue`, `#red`, etc.)
-- **Clock in/out** — Start and stop timing sessions directly from the UI
+- **Task management** — Tasks organised by category with colour tags
+- **Clock in/out** — Start and stop timing sessions from the UI
 - **Live elapsed time** — Active session timer updates every second
 - **Goal tracking** — Set target hours and deadlines per task with pace calculations
-- **Analytics dashboards** — Daily breakdown, weekday averages, weekly comparison, hourly heatmap
-- **Insight engine** — Auto-generated insights (streaks, peak hours, best day, goal pace)
-- **Auto-reload** — Vault file reloads in the background every 30 seconds
+- **Tabbed analytics** — Overview, per-category, and per-task dashboards
+- **Charts** — Daily breakdown, weekday averages, weekly comparison, hourly heatmap, session histograms, cumulative pace
+- **Insight engine** — Auto-generated insights (peak hours, best day, week-over-week delta)
+- **Calendar tab** — GitHub-style contribution heat map + Google Calendar-style monthly grid; click any day to view, edit, delete, or add sessions
+- **Dark / light theme** — Toggle in the top bar
+- **Auto-reload** — DB reloads in the background every 30 seconds
 
 ## Requirements
 
 - Python 3.9+
-- PyQt5
-- numpy
-
-Install dependencies:
+- PostgreSQL (local or remote)
+- PyQt5, numpy, SQLAlchemy, psycopg2-binary, Alembic, python-dotenv
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## Usage
+## Setup
+
+1. Copy `.env.example` to `.env` and fill in your PostgreSQL credentials:
+
+```env
+DATABASE_URL=postgresql+psycopg2://user:pass@localhost:5432/time_tracker
+```
+
+2. Run migrations:
+
+```bash
+alembic upgrade head
+```
+
+3. Launch:
 
 ```bash
 python run.py
 ```
-
-Or point it at a specific vault file:
-
-```bash
-python run.py /path/to/vault/2026-Q1.md
-```
-
-The default vault path can also be changed via the path input and Browse button in the app's top bar.
 
 ## Project Structure
 
 ```
 time_tracker/
 ├── core/
-│   ├── models.py       # Task, Session, GoalSpec dataclasses
-│   ├── parser.py       # VaultParser / VaultWriter (thread-safe file I/O)
-│   └── analytics.py    # RangeStats, GoalTracker, InsightEngine
+│   ├── models.py       # Task, Session, GoalSpec dataclasses + TAG_PALETTES
+│   ├── db_store.py     # DBStore — thread-safe PostgreSQL reads and writes
+│   ├── parser.py       # ParseResult container (returned by DBStore.load)
+│   └── analytics.py    # RangeStats, GoalTracker, InsightEngine, TaskSessionStats
 ├── ui/
-│   ├── main_window.py  # Top-level QMainWindow and layout
-│   ├── widgets.py      # Reusable components (MetricCard, TaskRow, etc.)
-│   └── theme.py        # Color palette and constants
+│   ├── main_window.py  # Top-level QMainWindow; orchestrates tabs and timers
+│   ├── tab_widgets.py      # CategoryTabWidget, TaskTabWidget
+│   ├── calendar_widget.py  # CalendarWidget — contribution graph + month grid
+│   ├── widgets.py      # Reusable components (MetricCard, TaskRow, SessionTable, …)
+│   └── theme.py        # Dark/light colour tokens and spacing constants
 ├── charts/
-│   └── panels.py       # Chart panels (stacked area, weekday bar, heatmap, etc.)
+│   └── panels.py       # QPainter chart panels (area, bar, heatmap, pie, etc.)
+database/
+├── db.py               # SQLAlchemy engine + SessionLocal
+├── models/             # ORM models: Task, HistoricClock, CurrentClock, Category
+└── alembic/            # Migration scripts
 run.py                  # Entry point
+.env.example            # Environment variable template
 requirements.txt
 ```
 
-## Data Format
+## Database Schema
 
-Tasks are stored in a markdown file as standard checkbox items with inline clock annotations:
-
-```markdown
-- [ ] Learn Python #blue [clock::2026-03-30T09:00:00--2026-03-30T10:30:00]
-- [ ] Code review #green [clock::2026-03-30T11:00:00--]
-```
-
-An open session (no end time) means the task is currently clocked in.
+| Table | Key columns |
+|---|---|
+| `tasks` | `id`, `name`, `category`, `color` |
+| `historic_clocks` | `id`, `tasks_id`, `start_time`, `end_time`, `total_sec` |
+| `current_clocks` | `id`, `task_id`, `start_time` — one row = active session |
+| `categories` | `id`, `name`, `colour_tag` |
+| `goals` | managed by DBStore |
