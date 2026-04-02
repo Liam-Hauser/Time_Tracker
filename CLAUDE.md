@@ -21,7 +21,7 @@ There are no tests or linting configuration in this project.
 
 ## Architecture
 
-PyQt5 desktop app backed by **PostgreSQL**. All time data lives in the database — there is no markdown vault file anymore.
+PyQt5 desktop app backed by **PostgreSQL**. All time data lives in the database.
 
 ### Data flow
 

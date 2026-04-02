@@ -73,10 +73,10 @@ requirements.txt
 
 ## Database Schema
 
-| Table | Key columns |
-|---|---|
-| `tasks` | `id`, `name`, `category`, `color` |
-| `historic_clocks` | `id`, `tasks_id`, `start_time`, `end_time`, `total_sec` |
+| Table | Key columns                                              |
+|---|----------------------------------------------------------|
+| `tasks` | `id`, `name`, `category`, `color`                        |
+| `historic_clocks` | `id`, `tasks_id`, `start_time`, `end_time`, `total_sec`  |
 | `current_clocks` | `id`, `task_id`, `start_time` — one row = active session |
-| `categories` | `id`, `name`, `colour_tag` |
-| `goals` | managed by DBStore |
+| `categories` | `id`, `name`, `colour_tag`                               |
+| `goals` | `id`, `task_id`, `name`, `target_hours`, `by_date`        |
