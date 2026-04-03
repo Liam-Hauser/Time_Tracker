@@ -97,14 +97,15 @@ _CG_TOP      = 18   # room for month labels
 
 
 def _percentile_colours(total_by_day: dict[date, float]) -> dict[date, str]:
+    """Returns only non-zero days; zero/missing days are rendered with BG3 in paintEvent."""
     non_zero = sorted(v for v in total_by_day.values() if v > 0)
     if not non_zero:
-        return {d: _HEAT[0] for d in total_by_day}
+        return {}
     n = len(non_zero)
     out: dict[date, str] = {}
     for d, secs in total_by_day.items():
         if secs <= 0:
-            out[d] = _HEAT[0]; continue
+            continue   # handled in paintEvent using current BG3
         rank = sum(1 for v in non_zero if v <= secs) / n
         out[d] = (_HEAT[5] if rank >= 0.90 else
                   _HEAT[4] if rank >= 0.70 else
@@ -203,7 +204,7 @@ class ContributionGraph(QWidget):
                 if d > today:
                     continue
                 rc = self._cell_rect(w, dow)
-                p.setBrush(QColor(self._colours.get(d, _HEAT[0])))
+                p.setBrush(QColor(self._colours.get(d, BG3)))
                 p.setPen(QPen(QColor(TEXT), 1)
                          if d == self._hovered else Qt.NoPen)
                 p.drawRoundedRect(rc, 2, 2)

@@ -15,7 +15,8 @@ from PyQt5.QtWidgets import (
     QDoubleSpinBox, QDialog, QDialogButtonBox,
     QDateEdit, QLineEdit, QComboBox,
 )
-from PyQt5.QtGui import QColor, QPalette
+from PyQt5.QtGui import QColor, QPalette, QIcon, QPainter, QPainterPath
+from pathlib import Path
 
 from ..core import (
     DBStore, ParseResult, RangeStats,
@@ -434,6 +435,24 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Time Tracker")
         self.resize(1600, 960)
+        _icon_path = Path(__file__).parent.parent / "icon.png"
+        if _icon_path.exists():
+            from PyQt5.QtGui import QPixmap
+            from PyQt5.QtCore import QRectF as _QRectF
+            _px = QPixmap(str(_icon_path))
+            if not _px.isNull():
+                _w, _h = _px.width(), _px.height()
+                _r = min(_w, _h) * 0.18
+                _out = QPixmap(_w, _h)
+                _out.fill(Qt.transparent)
+                _p = QPainter(_out)
+                _p.setRenderHint(QPainter.Antialiasing)
+                _pp = QPainterPath()
+                _pp.addRoundedRect(_QRectF(0, 0, _w, _h), _r, _r)
+                _p.setClipPath(_pp)
+                _p.drawPixmap(0, 0, _px)
+                _p.end()
+                self.setWindowIcon(QIcon(_out))
 
         self._store      = DBStore()
         self._result:      Optional[ParseResult]          = None
@@ -1225,6 +1244,13 @@ class MainWindow(QMainWindow):
     # ── Theme toggle ─────────────────────────────────────────
 
     def _on_toggle_theme(self) -> None:
+        # Remember active tab so we can restore it after rebuild
+        saved_tab = ""
+        if hasattr(self, "_tabs"):
+            idx = self._tabs.currentIndex()
+            if idx >= 0:
+                saved_tab = self._tabs.tabBar().tabText(idx)
+
         from ..ui import theme as _theme
         # Switch palette module-level vars and propagate to consumer modules
         if _theme.IS_DARK:
@@ -1241,6 +1267,13 @@ class MainWindow(QMainWindow):
         self._apply_palette()
         if self._result:
             self._on_reload_done(self._result)
+
+        # Restore the tab the user was on
+        if saved_tab:
+            for i in range(self._tabs.count()):
+                if self._tabs.tabBar().tabText(i) == saved_tab:
+                    self._tabs.setCurrentIndex(i)
+                    break
 
     # ── Session management ───────────────────────────────────
 

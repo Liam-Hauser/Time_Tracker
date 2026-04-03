@@ -60,12 +60,20 @@ _DARK_PALETTE: dict = dict(
     BG="#0d0d0d", BG2="#141414", BG3="#1c1c1c", BG4="#242424",
     BORDER="#2a2a2a", BORDER2="#3d3d3d",
     TEXT="#ededed", MUTED="#737373", FAINT="#383838",
+    ACCENT_DIM="#1b3466",
+    SUCCESS_DIM="#0d3320",
+    WARNING_DIM="#3d2600",
+    DANGER_DIM="#3d0a0a",
 )
 
 _LIGHT_PALETTE: dict = dict(
     BG="#f4f5f7", BG2="#ffffff", BG3="#f0f1f3", BG4="#e8e9eb",
     BORDER="#e2e3e5", BORDER2="#c8c9cb",
     TEXT="#111827", MUTED="#6b7280", FAINT="#d1d5db",
+    ACCENT_DIM="#dbeafe",
+    SUCCESS_DIM="#dcfce7",
+    WARNING_DIM="#fef9c3",
+    DANGER_DIM="#fee2e2",
 )
 
 

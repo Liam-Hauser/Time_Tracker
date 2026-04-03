@@ -594,7 +594,9 @@ class HourHeatmap(NativeChart):
                 # Value text if cell wide enough and value > 0
                 if cell_w > 22 and val >= 0.1:
                     p.setFont(_font(7))
-                    p.setPen(QColor(255, 255, 255, 180))
+                    lum = 0.299 * r + 0.587 * g + 0.114 * b
+                    text_rgba = (0, 0, 0, 180) if lum > 140 else (255, 255, 255, 180)
+                    p.setPen(QColor(*text_rgba))
                     p.drawText(cell, Qt.AlignCenter, f"{val:.1f}")
 
 
@@ -603,7 +605,7 @@ class HourHeatmap(NativeChart):
 # ──────────────────────────────────────────────────────────
 
 class WeeklyCompChart(NativeChart):
-    _PAD = (8, 80, 12, 0)   # right: delta labels, left: task names drawn manually
+    _PAD = (34, 80, 12, 0)  # top: space for legend; right: delta labels
 
     def __init__(self, parent=None):
         super().__init__(fixed_height=200, parent=parent)
@@ -614,7 +616,7 @@ class WeeklyCompChart(NativeChart):
                       for t in comp.this_week.active_tasks
                                + comp.last_week.active_tasks}
         n = max(len(all_tasks), 1)
-        self.setMinimumHeight(max(140, 24 + n * 36 + 16))
+        self.setMinimumHeight(max(160, self._PAD[0] + n * 36 + self._PAD[2] + 10))
         self.update()
 
     def refresh(self, stats: RangeStats) -> None:
@@ -650,7 +652,7 @@ class WeeklyCompChart(NativeChart):
         bar_area_w = self.width() - bar_area_x - self._PAD[1]
         ROW_H = 36
         BAR_H = 11
-        PAD_T = 8
+        PAD_T = self._PAD[0]
 
         tw_vals = [comp.this_week.task_seconds.get(n, 0) / 3600 for n in names]
         lw_vals = [comp.last_week.task_seconds.get(n, 0) / 3600 for n in names]
@@ -860,8 +862,14 @@ class SessionHistogramChart(_TaskChart):
         super().__init__(fixed_height=200, parent=parent)
 
     def _paint(self, p: QPainter) -> None:
-        ts      = self._task_stats
-        buckets = ts.session_length_buckets(15)
+        ts = self._task_stats
+        # Choose bucket size based on the range of session lengths
+        if ts.session_durations:
+            max_min = max(ts.session_durations) / 60
+            bucket_min = 5 if max_min <= 30 else (30 if max_min > 120 else 15)
+        else:
+            bucket_min = 15
+        buckets = ts.session_length_buckets(bucket_min)
         if not buckets:
             self._draw_no_data(p)
             return

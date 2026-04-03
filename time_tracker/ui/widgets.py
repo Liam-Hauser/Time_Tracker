@@ -87,10 +87,11 @@ class MetricCard(QFrame):
         lay.addStretch()
 
     def update_value(self, value: str, sub: str = "",
-                     colour: str = TEXT) -> None:
+                     colour: str = "") -> None:
         self._value.setText(value)
+        _col = colour if colour else TEXT   # read TEXT from module scope at call time
         self._value.setStyleSheet(
-            f"color: {colour}; font-size: 24px; font-weight: 600;"
+            f"color: {_col}; font-size: 24px; font-weight: 600;"
             f" background: transparent; border: none;"
         )
         self._sub.setText(sub)
@@ -100,19 +101,18 @@ class MetricCard(QFrame):
 # Insight strip  (row of small insight cards)
 # ──────────────────────────────────────────────────────────
 
-_SENTIMENT_COLORS = {
-    "positive": (SUCCESS, SUCCESS_DIM),
-    "warning":  (WARNING, WARNING_DIM),
-    "negative": (DANGER,  DANGER_DIM),
-    "neutral":  (MUTED,   BG3),
-}
-
-
 class InsightCard(QFrame):
     def __init__(self, icon: str, label_txt: str, value: str,
                  sub: str, sentiment: str, parent=None):
         super().__init__(parent)
-        fg, bg = _SENTIMENT_COLORS.get(sentiment, (MUTED, BG3))
+        # Build the colour map at init time so it reads current theme vars
+        _colors = {
+            "positive": (SUCCESS, SUCCESS_DIM),
+            "warning":  (WARNING, WARNING_DIM),
+            "negative": (DANGER,  DANGER_DIM),
+            "neutral":  (MUTED,   BG3),
+        }
+        fg, bg = _colors.get(sentiment, (MUTED, BG3))
         self.setStyleSheet(
             f"QFrame {{ background: {bg}; border-radius: 8px;"
             f" border: 1px solid {BORDER}; }}"

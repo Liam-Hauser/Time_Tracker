@@ -17,6 +17,10 @@ Copy `.env.example` to `.env` and fill in PostgreSQL credentials before first ru
 
 There are no tests or linting configuration in this project.
 
+## App icon
+
+`time_tracker/icon.png` (512×512). Loaded at startup in `run.py` via `QApplication.setWindowIcon` and in `MainWindow.__init__` via `self.setWindowIcon`. Both use `Path(__file__)` resolution so the path is portable.
+
 ---
 
 ## Architecture
