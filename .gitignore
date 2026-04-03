@@ -8,3 +8,4 @@ timetracker.db-shm
 timetracker.db-wal
 __pycache__/
 *.pyc
+dist/TimeTracker.zip

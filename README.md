@@ -35,10 +35,10 @@ No `.env` or database configuration needed. A SQLite database is created automat
 ## Building the exe
 
 ```bash
-python -m PyInstaller TimeTracker.spec
+python build.py
 ```
 
-Output: `dist/TimeTracker.exe`
+Output: `dist/TimeTracker.zip` (contains `TimeTracker.exe`) — ready to upload to a GitHub release.
 
 ## Project Structure
 
