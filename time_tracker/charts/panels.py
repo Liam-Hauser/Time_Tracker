@@ -861,43 +861,52 @@ class SessionHistogramChart(_TaskChart):
     def __init__(self, parent=None):
         super().__init__(fixed_height=200, parent=parent)
 
+    # Fixed 30-min buckets: <0.5h, 0.5-1h, 1-1.5h, 1.5-2h, 2-2.5h, >2.5h
+    _BUCKETS = [
+        (0,    1800,  "< 0.5h"),
+        (1800, 3600,  "0.5–1h"),
+        (3600, 5400,  "1–1.5h"),
+        (5400, 7200,  "1.5–2h"),
+        (7200, 9000,  "2–2.5h"),
+        (9000, None,  "> 2.5h"),
+    ]
+
     def _paint(self, p: QPainter) -> None:
         ts = self._task_stats
-        # Choose bucket size based on the range of session lengths
-        if ts.session_durations:
-            max_min = max(ts.session_durations) / 60
-            bucket_min = 5 if max_min <= 30 else (30 if max_min > 120 else 15)
-        else:
-            bucket_min = 15
-        buckets = ts.session_length_buckets(bucket_min)
-        if not buckets:
+        if not ts.session_durations:
             self._draw_no_data(p)
             return
 
-        rect    = self._plot_rect()
-        n       = len(buckets)
-        keys    = sorted(buckets.keys())
-        vals    = [buckets[k] for k in keys]
-        max_v   = max(vals)
-        colour  = ts.task.colour
-        bar_w   = max(4, rect.width() / n * 0.6)
-        modal   = keys[vals.index(max_v)]
+        vals = []
+        for lo, hi, _ in self._BUCKETS:
+            count = sum(1 for s in ts.session_durations
+                        if s >= lo and (hi is None or s < hi))
+            vals.append(count)
 
-        for i, (k, v) in enumerate(zip(keys, vals)):
+        if not any(vals):
+            self._draw_no_data(p)
+            return
+
+        rect   = self._plot_rect()
+        n      = len(self._BUCKETS)
+        max_v  = max(vals)
+        colour = ts.task.colour
+        bar_w  = max(4, rect.width() / n * 0.6)
+        modal  = vals.index(max_v)
+
+        for i, ((_, _, lbl), v) in enumerate(zip(self._BUCKETS, vals)):
             x  = rect.x() + (i + 0.5) / n * rect.width() - bar_w / 2
-            bh = v / max_v * rect.height()
+            bh = v / max_v * rect.height() if max_v > 0 else 0
             y  = rect.bottom() - bh
-            c  = QColor(colour) if k == modal else QColor(BG4)
+            c  = QColor(colour) if i == modal else QColor(BG4)
             p.setPen(Qt.NoPen)
             p.setBrush(c)
-            p.drawRoundedRect(QRectF(x, y, bar_w, bh), 2, 2)
+            if bh > 0:
+                p.drawRoundedRect(QRectF(x, y, bar_w, bh), 2, 2)
 
-            # X label
-            mins = k
-            lbl  = f"{mins}m" if mins < 60 else f"{mins // 60}h"
             p.setFont(_font(8))
             p.setPen(QColor(MUTED))
-            p.drawText(QRectF(x - 4, rect.bottom() + 4, bar_w + 8, 14),
+            p.drawText(QRectF(x - 8, rect.bottom() + 4, bar_w + 16, 14),
                        Qt.AlignCenter, lbl)
 
         self._draw_axes(p, rect)
