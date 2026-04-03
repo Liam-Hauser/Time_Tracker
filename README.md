@@ -1,6 +1,6 @@
 # Time Tracker
 
-A PyQt5 desktop application for detailed time tracking and analytics. Data is stored in PostgreSQL, managed via SQLAlchemy and Alembic.
+A PyQt5 desktop application for detailed time tracking and analytics. Data is stored locally in SQLite — no database setup required.
 
 ## Features
 
@@ -15,45 +15,40 @@ A PyQt5 desktop application for detailed time tracking and analytics. Data is st
 - **Session management** — Manually add, edit, or delete sessions from the task tab or calendar
 - **Dark / light theme** — Toggle in the top bar
 - **Auto-reload** — DB reloads in the background every 30 seconds
+- **Update notifications** — Checks GitHub releases on startup and shows a button when a newer version is available
 
-## Requirements
+## Distribution
 
-- Python 3.9+
-- PostgreSQL (local or remote)
-- PyQt5, SQLAlchemy, psycopg2-binary, Alembic, python-dotenv
+Download the latest `TimeTracker.exe` from [Releases](https://github.com/Liam-Hauser/Time_Tracker/releases/latest). No install, no Python required.
+
+Data is stored at `%LOCALAPPDATA%\TimeTracker\timetracker.db`. Replacing the exe with a newer version preserves all existing data.
+
+## Development setup
 
 ```bash
 pip install -r requirements.txt
-```
-
-## Setup
-
-1. Copy `.env.example` to `.env` and fill in your PostgreSQL credentials:
-
-```env
-DATABASE_URL=postgresql+psycopg2://user:pass@localhost:5432/time_tracker
-```
-
-2. Run migrations:
-
-```bash
-alembic upgrade head
-```
-
-3. Launch:
-
-```bash
 python run.py
 ```
+
+No `.env` or database configuration needed. A SQLite database is created automatically at `timetracker.db` in the project root on first launch.
+
+## Building the exe
+
+```bash
+python -m PyInstaller TimeTracker.spec
+```
+
+Output: `dist/TimeTracker.exe`
 
 ## Project Structure
 
 ```
 time_tracker/
+├── version.py          # VERSION constant and GITHUB_REPO
 ├── icon.png            # Application icon (512×512)
 ├── core/
 │   ├── models.py       # Task, Session, GoalSpec dataclasses + TAG_PALETTES
-│   ├── db_store.py     # DBStore — thread-safe PostgreSQL reads and writes
+│   ├── db_store.py     # DBStore — thread-safe SQLite reads and writes
 │   ├── parser.py       # ParseResult container (returned by DBStore.load)
 │   └── analytics.py    # RangeStats, GoalTracker, InsightEngine, TaskSessionStats
 ├── ui/
@@ -65,11 +60,12 @@ time_tracker/
 ├── charts/
 │   └── panels.py       # QPainter chart panels (area, bar, heatmap, pie, etc.)
 database/
-├── db.py               # SQLAlchemy engine + SessionLocal
+├── db.py               # SQLAlchemy engine + SessionLocal (SQLite)
+├── migrate.py          # Runs Alembic on startup; stamps existing DBs automatically
 ├── models/             # ORM models: Task, HistoricClock, CurrentClock, Category, Goal
 └── alembic/            # Migration scripts
 run.py                  # Entry point
-.env.example            # Environment variable template
+TimeTracker.spec        # PyInstaller build spec
 requirements.txt
 ```
 

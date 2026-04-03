@@ -13,7 +13,7 @@ Install dependencies:
 pip install -r requirements.txt
 ```
 
-Copy `.env.example` to `.env` and fill in PostgreSQL credentials before first run.
+No configuration needed. A SQLite database is created automatically at `timetracker.db` in the project root on first launch.
 
 There are no tests or linting configuration in this project.
 
@@ -25,12 +25,12 @@ There are no tests or linting configuration in this project.
 
 ## Architecture
 
-PyQt5 desktop app backed by **PostgreSQL**. All time data lives in the database.
+PyQt5 desktop app backed by **SQLite**. All time data lives in a local `timetracker.db` file.
 
 ### Data flow
 
 ```
-PostgreSQL DB
+SQLite DB
     → DBStore.load()            → ParseResult (immutable snapshot)
     → RangeStats(tasks, s, e)   → aggregated metrics for a date window
     → InsightEngine.compute()   → list[Insight]
@@ -50,13 +50,14 @@ Writes go through `DBStore` methods (`clock_in`, `clock_out`, `save_goals`, etc.
 | Class | File | Role |
 |---|---|---|
 | `Task`, `Session`, `GoalSpec` | `core/models.py` | Core dataclasses; `Session.end = None` means currently clocked in; `Task.start_line` holds DB `tasks.id`; `Session.line_index` holds DB clock record id |
-| `DBStore` | `core/db_store.py` | Thread-safe PostgreSQL reads and writes; replaces old VaultParser/VaultWriter |
+| `DBStore` | `core/db_store.py` | Thread-safe SQLite reads and writes via SQLAlchemy |
 | `ParseResult` | `core/parser.py` | Immutable snapshot returned by `DBStore.load()` |
 | `RangeStats` | `core/analytics.py` | Pre-computes daily/weekday/hourly aggregates for a date window |
 | `InsightEngine` | `core/analytics.py` | Produces `Insight` objects (streak, peak hour, goal pace, etc.) |
 | `TaskSessionStats` | `core/analytics.py` | Single-task aggregations within a date range |
 | `MainWindow` | `ui/main_window.py` | Orchestrates everything; holds `_result`, `_goals`, `_task_rows` |
 | `ReloadWorker` | `ui/main_window.py` | Runs `DBStore.load()` off the main thread via `QThread` |
+| `UpdateChecker` | `ui/main_window.py` | Checks GitHub releases API on startup; emits `update_available` signal if a newer version exists |
 | `CategoryTabWidget` | `ui/tab_widgets.py` | Full chart view scoped to one category |
 | `TaskTabWidget` | `ui/tab_widgets.py` | Full chart/session view scoped to one task |
 | `CalendarWidget` | `ui/calendar_widget.py` | Calendar tab — contribution graph + monthly grid + session day panel |
@@ -87,13 +88,9 @@ categories       — id, name, colour_tag             ← key into TAG_PALETTES
 goals            — (managed via DBStore.save_goals)
 ```
 
-Migrations live in `database/alembic/versions/`. Run with `alembic upgrade head`.
+Migrations live in `database/alembic/versions/`. They run automatically on startup via `database/migrate.py` — no manual `alembic` commands needed.
 
-DB connection is configured via `.env`:
-```
-DATABASE_URL=postgresql+psycopg2://user:pass@host:port/dbname
-```
-or individual vars: `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT`, `DB_NAME`.
+DB path: `timetracker.db` in project root (dev) or `%LOCALAPPDATA%/TimeTracker/timetracker.db` (frozen exe). No `.env` or credentials required.
 
 ---
 

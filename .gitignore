@@ -1,1 +1,10 @@
 .env
+dist/.env
+dist/
+build/
+*.spec
+timetracker.db
+timetracker.db-shm
+timetracker.db-wal
+__pycache__/
+*.pyc

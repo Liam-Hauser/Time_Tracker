@@ -72,6 +72,28 @@ class ReloadWorker(QObject):
 
 
 # ──────────────────────────────────────────────────────────
+# Update checker
+# ──────────────────────────────────────────────────────────
+
+class UpdateChecker(QObject):
+    update_available = pyqtSignal(str)  # emits latest version string
+
+    def run(self) -> None:
+        try:
+            import urllib.request, json
+            from ..version import GITHUB_REPO, VERSION
+            url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+            req = urllib.request.Request(url, headers={"User-Agent": "TimeTracker"})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read())
+            latest = data.get("tag_name", "").lstrip("v")
+            if latest and latest != VERSION:
+                self.update_available.emit(latest)
+        except Exception:
+            pass  # silently ignore — no internet, rate limit, etc.
+
+
+# ──────────────────────────────────────────────────────────
 # Goal dialog  (hours + optional deadline)
 # ──────────────────────────────────────────────────────────
 
@@ -535,9 +557,18 @@ class MainWindow(QMainWindow):
             f" letter-spacing: 0.5px; background: transparent; border: none;"
         )
         lay.addWidget(logo)
-        lay.addWidget(v_line())
-        lay.addWidget(label("PostgreSQL", MUTED, size=10))
         lay.addStretch()
+
+        self._update_btn = QPushButton("⬆ Update available")
+        self._update_btn.setVisible(False)
+        self._update_btn.setStyleSheet(
+            f"QPushButton {{ background: {SUCCESS}; color: #fff;"
+            f" border: none; border-radius: 5px; padding: 4px 10px;"
+            f" font-size: 11px; font-weight: 600; }}"
+            f"QPushButton:hover {{ background: #2ea85a; }}"
+        )
+        self._update_btn.clicked.connect(self._open_releases)
+        lay.addWidget(self._update_btn)
 
         for txt, slot in [("Reload",   self._trigger_reload),
                           ("☀ Light", self._on_toggle_theme)]:
@@ -550,6 +581,8 @@ class MainWindow(QMainWindow):
         lay.addWidget(self._updated_lbl)
 
         root.addWidget(bar)
+
+        self._start_update_check()
 
     def _build_body(self, root: QVBoxLayout) -> None:
         _h_css = (
@@ -780,7 +813,21 @@ class MainWindow(QMainWindow):
 
     def _on_reload_error(self, msg: str) -> None:
         self._updated_lbl.setText("Error — see console")
-        QMessageBox.critical(self, "Failed to load data", msg)
+        print(msg, flush=True)
+        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QTextEdit, QDialogButtonBox
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Failed to load data")
+        dlg.resize(700, 400)
+        layout = QVBoxLayout(dlg)
+        te = QTextEdit()
+        te.setReadOnly(True)
+        te.setPlainText(msg)
+        te.setFont(__import__("PyQt5.QtGui", fromlist=["QFont"]).QFont("Courier New", 9))
+        layout.addWidget(te)
+        btns = QDialogButtonBox(QDialogButtonBox.Ok)
+        btns.accepted.connect(dlg.accept)
+        layout.addWidget(btns)
+        dlg.exec_()
 
     def _apply_goals_to_tasks(self) -> None:
         if not self._result:
@@ -1335,6 +1382,28 @@ class MainWindow(QMainWindow):
             self._rebuild_goal_rows()
 
     # ── Helpers ──────────────────────────────────────────
+
+    def _start_update_check(self) -> None:
+        from ..version import VERSION
+        self._update_thread = QThread()
+        self._update_worker = UpdateChecker()
+        self._update_worker.moveToThread(self._update_thread)
+        self._update_thread.started.connect(self._update_worker.run)
+        self._update_worker.update_available.connect(self._on_update_available)
+        self._update_worker.update_available.connect(self._update_thread.quit)
+        self._update_thread.finished.connect(self._update_thread.deleteLater)
+        self._update_thread.start()
+
+    def _on_update_available(self, latest: str) -> None:
+        from ..version import VERSION
+        self._update_btn.setText(f"⬆ Update available  v{VERSION} → v{latest}")
+        self._update_btn.setVisible(True)
+
+    def _open_releases(self) -> None:
+        from ..version import GITHUB_REPO
+        from PyQt5.QtGui import QDesktopServices
+        from PyQt5.QtCore import QUrl
+        QDesktopServices.openUrl(QUrl(f"https://github.com/{GITHUB_REPO}/releases/latest"))
 
     @staticmethod
     def _mk_btn(text: str, slot) -> QPushButton:
