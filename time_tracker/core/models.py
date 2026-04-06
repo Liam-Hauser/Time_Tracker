@@ -90,6 +90,7 @@ class Task:
     sessions:      list[Session]   = field(default_factory=list)
     goal_hours:    float           = 0.0   # target total hours (0 = no goal)
     goal_deadline: Optional[date]  = None  # optional deadline
+    archived:      bool            = False
 
     # ── Clock state ──────────────────────────
     @property

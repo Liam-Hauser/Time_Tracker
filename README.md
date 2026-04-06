@@ -4,7 +4,7 @@ A PyQt5 desktop application for detailed time tracking and analytics. Data is st
 
 ## Features
 
-- **Task management** — Tasks organised by category with colour tags; rename, move, delete from the UI
+- **Task management** — Tasks organised by category with colour tags; rename, move, archive, or delete from the UI
 - **Clock in/out** — Start and stop timing sessions from the task list
 - **Live elapsed time** — Active session timer updates every second
 - **Goal tracking** — Set target hours and deadlines per task with pace calculations
@@ -73,7 +73,7 @@ requirements.txt
 
 | Table | Key columns |
 |---|---|
-| `tasks` | `id`, `name`, `category`, `color` |
+| `tasks` | `id`, `name`, `category`, `color`, `archived` |
 | `historic_clocks` | `id`, `tasks_id`, `start_time`, `end_time`, `total_sec` |
 | `current_clocks` | `id`, `task_id`, `start_time` — one row = active session |
 | `categories` | `id`, `name`, `colour_tag` |

@@ -40,6 +40,7 @@ from .theme import (
     DANGER,
     PAD_SM, PAD_MD, PAD_LG,
 )
+import time_tracker.ui.theme as _theme
 from .widgets import label, EditSessionDialog
 
 
@@ -80,13 +81,21 @@ _MONTH_NAMES = [
 ]
 _DAY_SHORT = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
 
-_HEAT = [
-    "#1c1c1c",  # 0 — no data
-    "#0d3320",  # 1 — bottom 20 %
+_HEAT_DARK = [
+    "#1c1c1c",  # 0 — no data (unused; BG3 is used in paintEvent)
+    "#0d3320",  # 1 — bottom 20 %  (darkest green — least activity)
     "#145a32",  # 2
     "#1e8449",  # 3
     "#27ae60",  # 4
-    "#2ecc71",  # 5 — top 10 %
+    "#2ecc71",  # 5 — top 10 %    (lightest green — most activity)
+]
+_HEAT_LIGHT = [
+    "#f0f1f3",  # 0 — no data (unused; BG3 is used in paintEvent)
+    "#bbf7d0",  # 1 — bottom 20 %  (lightest green — least activity)
+    "#86efac",  # 2
+    "#4ade80",  # 3
+    "#22c55e",  # 4
+    "#15803d",  # 5 — top 10 %    (darkest green — most activity)
 ]
 # Cell geometry for contribution graph
 _CELL, _GAP  = 12, 2
@@ -98,6 +107,7 @@ _CG_TOP      = 18   # room for month labels
 
 def _percentile_colours(total_by_day: dict[date, float]) -> dict[date, str]:
     """Returns only non-zero days; zero/missing days are rendered with BG3 in paintEvent."""
+    heat = _HEAT_DARK if _theme.IS_DARK else _HEAT_LIGHT
     non_zero = sorted(v for v in total_by_day.values() if v > 0)
     if not non_zero:
         return {}
@@ -107,10 +117,10 @@ def _percentile_colours(total_by_day: dict[date, float]) -> dict[date, str]:
         if secs <= 0:
             continue   # handled in paintEvent using current BG3
         rank = sum(1 for v in non_zero if v <= secs) / n
-        out[d] = (_HEAT[5] if rank >= 0.90 else
-                  _HEAT[4] if rank >= 0.70 else
-                  _HEAT[3] if rank >= 0.40 else
-                  _HEAT[2] if rank >= 0.20 else _HEAT[1])
+        out[d] = (heat[5] if rank >= 0.90 else
+                  heat[4] if rank >= 0.70 else
+                  heat[3] if rank >= 0.40 else
+                  heat[2] if rank >= 0.20 else heat[1])
     return out
 
 
@@ -858,7 +868,8 @@ class CalendarWidget(QWidget):
         s_dt = datetime(d.year, d.month, d.day, tm // 60, tm % 60)
         e_dt = min(s_dt + timedelta(hours=1),
                    datetime(d.year, d.month, d.day, 23, 59))
-        dlg = _CalendarAddSessionDialog(d, self._result.tasks,
+        active_tasks = [t for t in self._result.tasks if not t.archived]
+        dlg = _CalendarAddSessionDialog(d, active_tasks,
                                         preset_start=s_dt, preset_end=e_dt,
                                         parent=self)
         if dlg.exec_() != QDialog.Accepted:

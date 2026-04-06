@@ -11,7 +11,7 @@ from PyQt5.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton,
     QFrame, QSizePolicy, QScrollArea,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QMenu,
-    QDialog, QDialogButtonBox, QDateTimeEdit,
+    QDialog, QDialogButtonBox, QDateTimeEdit, QGraphicsOpacityEffect,
 )
 from PyQt5.QtCore import QDateTime
 
@@ -26,6 +26,11 @@ from .theme import (
 # ──────────────────────────────────────────────────────────
 # Primitive helpers
 # ──────────────────────────────────────────────────────────
+
+def _dim_effect(parent: QWidget, opacity: float = 0.4) -> QGraphicsOpacityEffect:
+    eff = QGraphicsOpacityEffect(parent)
+    eff.setOpacity(opacity)
+    return eff
 
 def h_line() -> QFrame:
     f = QFrame()
@@ -427,22 +432,27 @@ class TaskRow(QWidget):
     rename_requested    = pyqtSignal(str)
     move_requested      = pyqtSignal(str)
     delete_requested    = pyqtSignal(str)
+    archive_requested   = pyqtSignal(str, bool)   # name, archived
     clicked             = pyqtSignal(str)
 
     def __init__(self, task_name: str, colour: str,
                  total_sec: float = 0, max_sec: float = 1,
                  n_sessions: int = 0, clocked_in: bool = False,
                  elapsed_sec: float = 0, category_colour: str = "",
+                 archived: bool = False,
                  parent=None):
         super().__init__(parent)
         self._name       = task_name
         self._colour     = colour
         self._clocked_in = clocked_in
+        self._archived   = archived
 
         self.setStyleSheet(
             f"TaskRow {{ border-bottom: 1px solid {BORDER};"
             f" background: transparent; }}"
         )
+        if archived:
+            self.setGraphicsEffect(_dim_effect(self, opacity=0.45))
 
         lay = QHBoxLayout(self)
         lay.setContentsMargins(4, 8, 4, 8)
@@ -551,20 +561,38 @@ class TaskRow(QWidget):
         super().mousePressEvent(e)
 
     def contextMenuEvent(self, e) -> None:
-        menu = QMenu(self)
+        menu = QMenu()
         menu.setStyleSheet(
-            f"QMenu {{ background: {BG2}; color: {TEXT};"
-            f" border: 1px solid {BORDER}; padding: 2px; }}"
-            f" QMenu::item {{ padding: 5px 20px 5px 12px; }}"
-            f" QMenu::item:selected {{ background: {BG3}; }}"
+            f"QMenu {{"
+            f"  background: {BG3}; color: {TEXT};"
+            f"  border: 1px solid {BORDER2}; border-radius: 6px;"
+            f"  padding: 4px 0px;"
+            f"}}"
+            f"QMenu::item {{"
+            f"  padding: 5px 14px; font-size: 10px;"
+            f"  border-radius: 3px; margin: 0px 4px;"
+            f"}}"
+            f"QMenu::item:selected {{"
+            f"  background: {BG4}; color: {TEXT};"
+            f"}}"
+            f"QMenu::item:disabled {{"
+            f"  color: {FAINT};"
+            f"}}"
+            f"QMenu::separator {{"
+            f"  height: 1px; background: {BORDER}; margin: 3px 8px;"
+            f"}}"
         )
         menu.addAction("Rename…").triggered.connect(
             lambda: self.rename_requested.emit(self._name))
         menu.addAction("Move to category…").triggered.connect(
             lambda: self.move_requested.emit(self._name))
         menu.addSeparator()
+        arch_label = "Unarchive" if self._archived else "Archive"
+        arch_act = menu.addAction(arch_label)
+        arch_act.triggered.connect(
+            lambda: self.archive_requested.emit(self._name, not self._archived))
+        menu.addSeparator()
         del_act = menu.addAction("Delete task…")
-        del_act.setStyleSheet(f"color: {DANGER};")
         del_act.triggered.connect(
             lambda: self.delete_requested.emit(self._name))
         menu.exec_(e.globalPos())

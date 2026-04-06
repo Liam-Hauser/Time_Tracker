@@ -50,12 +50,12 @@ Writes go through `DBStore` methods (`clock_in`, `clock_out`, `save_goals`, etc.
 | Class | File | Role |
 |---|---|---|
 | `Task`, `Session`, `GoalSpec` | `core/models.py` | Core dataclasses; `Session.end = None` means currently clocked in; `Task.start_line` holds DB `tasks.id`; `Session.line_index` holds DB clock record id |
-| `DBStore` | `core/db_store.py` | Thread-safe SQLite reads and writes via SQLAlchemy |
+| `DBStore` | `core/db_store.py` | Thread-safe SQLite reads and writes via SQLAlchemy; `set_archived` toggles task visibility |
 | `ParseResult` | `core/parser.py` | Immutable snapshot returned by `DBStore.load()` |
 | `RangeStats` | `core/analytics.py` | Pre-computes daily/weekday/hourly aggregates for a date window |
 | `InsightEngine` | `core/analytics.py` | Produces `Insight` objects (streak, peak hour, goal pace, etc.) |
 | `TaskSessionStats` | `core/analytics.py` | Single-task aggregations within a date range |
-| `MainWindow` | `ui/main_window.py` | Orchestrates everything; holds `_result`, `_goals`, `_task_rows` |
+| `MainWindow` | `ui/main_window.py` | Orchestrates everything; holds `_result`, `_goals`, `_task_rows`; `_show_archived` toggle filters archived tasks from the list |
 | `ReloadWorker` | `ui/main_window.py` | Runs `DBStore.load()` off the main thread via `QThread` |
 | `UpdateChecker` | `ui/main_window.py` | Checks GitHub releases API on startup; emits `update_available` signal if a newer version exists |
 | `CategoryTabWidget` | `ui/tab_widgets.py` | Full chart view scoped to one category |
@@ -81,7 +81,7 @@ All colours, spacing constants, and weekday name arrays live in `ui/theme.py`. S
 ## Database schema
 
 ```
-tasks            — id, name, category (str tag), color (hex)
+tasks            — id, name, category (str tag), color (hex), archived (bool)
 historic_clocks  — id, tasks_id (FK), total_sec, start_time, end_time
 current_clocks   — id, task_id (FK), start_time    ← open session
 categories       — id, name, colour_tag             ← key into TAG_PALETTES

@@ -77,6 +77,7 @@ class DBStore:
                     colour=colour,
                     start_line=db_task.id,      # repurposed: DB task id
                     sessions=sessions,
+                    archived=bool(db_task.archived),
                 ))
 
         return ParseResult(tasks=tasks, raw_lines=[], parsed_at=datetime.now())
@@ -132,6 +133,18 @@ class DBStore:
                 task.color = colour_for_tag(colour_tag, count - 1)
                 db.commit()
 
+    def set_archived(self, task_id: int, archived: bool) -> None:
+        from database.db import SessionLocal
+        from database.models import Task as DBTask
+
+        with self._lock:
+            with SessionLocal() as db:
+                task = db.get(DBTask, task_id)
+                if task is None:
+                    raise ValueError(f"Task id {task_id} not found")
+                task.archived = archived
+                db.commit()
+
     def delete_task(self, task_id: int) -> None:
         from database.db import SessionLocal
         from database.models import (
@@ -170,6 +183,22 @@ class DBStore:
                 if existing:
                     raise ValueError(f"A category named '{name}' already exists")
                 db.add(DBCategory(name=name, colour_tag=colour_tag))
+                db.commit()
+
+    def rename_category(self, old_name: str, new_name: str) -> None:
+        """Rename a category and update all tasks that belong to it."""
+        from database.db import SessionLocal
+        from database.models import Category as DBCategory, Task as DBTask
+
+        with self._lock:
+            with SessionLocal() as db:
+                cat = db.query(DBCategory).filter_by(name=old_name).first()
+                if cat is None:
+                    raise ValueError(f"Category '{old_name}' not found")
+                if db.query(DBCategory).filter_by(name=new_name).first():
+                    raise ValueError(f"A category named '{new_name}' already exists")
+                cat.name = new_name
+                db.query(DBTask).filter_by(category=old_name).update({"category": new_name})
                 db.commit()
 
     # ── Goals ────────────────────────────────────────────────

@@ -1,5 +1,5 @@
 from .sqlalchemy_base import Base
-from sqlalchemy import Column, String, Integer
+from sqlalchemy import Column, String, Integer, Boolean
 
 class Task(Base):
     __tablename__ = "tasks"
@@ -8,3 +8,4 @@ class Task(Base):
     name = Column(String)
     category = Column(String)
     color = Column(String)
+    archived = Column(Boolean, default=False)

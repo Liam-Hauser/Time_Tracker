@@ -13,7 +13,7 @@ from PyQt5.QtWidgets import (
     QLabel, QPushButton, QScrollArea,
     QFrame, QSplitter, QMessageBox, QTabWidget,
     QDoubleSpinBox, QDialog, QDialogButtonBox,
-    QDateEdit, QLineEdit, QComboBox,
+    QDateEdit, QLineEdit, QComboBox, QMenu,
 )
 from PyQt5.QtGui import QColor, QPalette, QIcon, QPainter, QPainterPath
 from pathlib import Path
@@ -327,6 +327,60 @@ class NewCategoryDialog(QDialog):
         return self._name.text().strip(), self._colour.currentData()
 
 
+class RenameCategoryDialog(QDialog):
+    def __init__(self, categories: list[tuple[str, str]], parent=None):
+        """categories: list of (name, colour_tag) from the DB."""
+        super().__init__(parent)
+        self.setWindowTitle("Rename Category")
+        self.setFixedWidth(340)
+        self.setStyleSheet(
+            f"background: {BG}; color: {TEXT};"
+            f" QLabel {{ background: transparent; }}"
+        )
+
+        root = QVBoxLayout(self)
+        root.setSpacing(PAD_SM)
+
+        root.addWidget(label("Category to rename", MUTED, size=10))
+        self._category = QComboBox()
+        self._category.setStyleSheet(_COMBO_CSS)
+        for cat_name, colour_tag in categories:
+            swatch = _swatch_for_tag(colour_tag)
+            self._category.addItem(f"● {cat_name}", userData=cat_name)
+            idx = self._category.count() - 1
+            self._category.setItemData(idx, QColor(swatch), Qt.ForegroundRole)
+        root.addWidget(self._category)
+
+        root.addWidget(label("New name", MUTED, size=10))
+        self._name = QLineEdit()
+        self._name.setStyleSheet(_INPUT_CSS)
+        self._name.setPlaceholderText("New category name")
+        root.addWidget(self._name)
+        root.addStretch()
+
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btns.setStyleSheet(f"color: {TEXT};")
+        btns.accepted.connect(self._on_accept)
+        btns.rejected.connect(self.reject)
+        root.addWidget(btns)
+
+    def _on_accept(self) -> None:
+        name = self._name.text().strip()
+        if not name:
+            self._name.setStyleSheet(
+                _INPUT_CSS + f" QLineEdit {{ border-color: {DANGER}; }}"
+            )
+            return
+        if name[0].islower():
+            name = name[0].upper() + name[1:]
+            self._name.setText(name)
+        self.accept()
+
+    def values(self) -> tuple[str, str]:
+        """Returns (old_category_name, new_category_name)."""
+        return self._category.currentData(), self._name.text().strip()
+
+
 class NewTaskDialog(QDialog):
     def __init__(self, categories: list[tuple[str, str]], parent=None):
         """categories: list of (name, colour_tag) from the DB."""
@@ -488,6 +542,7 @@ class MainWindow(QMainWindow):
         self._date_low  = 0
         self._date_high = 0
         self._all_dates: list[date] = []
+        self._show_archived = False
 
         self._thread: Optional[QThread]      = None
         self._worker: Optional[ReloadWorker] = None
@@ -620,11 +675,26 @@ class MainWindow(QMainWindow):
         rl.addWidget(self._range_lbl)
         ll.addWidget(rc)
 
-        # Task list header: label + "+ Category" button
+        # Task list header: label + "Archived" toggle + "+ Category" button
         tasks_hdr = QHBoxLayout()
         tasks_hdr.setContentsMargins(0, 0, 0, 0)
         tasks_hdr.addWidget(label("Tasks", TEXT, bold=True, size=11))
         tasks_hdr.addStretch()
+        self._archived_btn = QPushButton("Archived")
+        self._archived_btn.setFixedHeight(22)
+        self._archived_btn.setCheckable(True)
+        self._archived_btn.setChecked(self._show_archived)
+        self._archived_btn.setStyleSheet(
+            f"QPushButton {{ background: transparent; color: {MUTED};"
+            f" border: 1px solid {BORDER}; border-radius: 4px;"
+            f" font-size: 10px; padding: 0 8px; }}"
+            f" QPushButton:hover {{ color: {TEXT}; background: {BG3};"
+            f" border-color: {BORDER2}; }}"
+            f" QPushButton:checked {{ color: {TEXT}; background: {BG3};"
+            f" border-color: {BORDER2}; }}"
+        )
+        self._archived_btn.toggled.connect(self._on_toggle_archived)
+        tasks_hdr.addWidget(self._archived_btn)
         add_cat_btn = QPushButton("+ Category")
         add_cat_btn.setFixedHeight(22)
         add_cat_btn.setStyleSheet(
@@ -634,7 +704,7 @@ class MainWindow(QMainWindow):
             f" QPushButton:hover {{ color: {TEXT}; background: {BG3};"
             f" border-color: {BORDER2}; }}"
         )
-        add_cat_btn.clicked.connect(self._on_new_category)
+        add_cat_btn.clicked.connect(self._on_category_menu)
         tasks_hdr.addWidget(add_cat_btn)
         ll.addLayout(tasks_hdr)
 
@@ -848,12 +918,23 @@ class MainWindow(QMainWindow):
         if not self._result:
             return
 
-        all_sec = [t.total_seconds for t in self._result.tasks]
+        # Decide which tasks to show
+        visible_tasks = []
+        hidden_archived = 0
+        for t in self._result.tasks:
+            if t.archived:
+                if self._show_archived:
+                    visible_tasks.append(t)
+                else:
+                    hidden_archived += 1
+                continue
+            visible_tasks.append(t)
+
+        all_sec = [t.total_seconds for t in visible_tasks]
         max_sec = max(all_sec) if all_sec else 1.0
 
         self._task_rows = {}
-        for t in sorted(self._result.tasks,
-                        key=lambda t: t.total_seconds, reverse=True):
+        for t in sorted(visible_tasks, key=lambda t: t.total_seconds, reverse=True):
             elapsed = (t.open_session.duration.total_seconds()
                        if t.open_session else 0)
             cat_colour = _swatch_for_tag(
@@ -868,15 +949,24 @@ class MainWindow(QMainWindow):
                 clocked_in       = t.is_clocked_in,
                 elapsed_sec      = elapsed,
                 category_colour  = cat_colour,
+                archived         = t.archived,
             )
             row.clock_in_requested.connect(self._on_clock_in)
             row.clock_out_requested.connect(self._on_clock_out)
             row.rename_requested.connect(self._on_rename_task)
             row.move_requested.connect(self._on_move_task)
             row.delete_requested.connect(self._on_delete_task)
+            row.archive_requested.connect(self._on_archive_task)
             row.clicked.connect(self._open_task_tab)
             self._task_layout.insertWidget(self._task_layout.count() - 1, row)
             self._task_rows[t.name] = row
+
+        # Footer hint when tasks are hidden
+        if hidden_archived > 0 and not self._show_archived:
+            hint = label(f"{hidden_archived} archived hidden", FAINT, size=9)
+            hint.setAlignment(Qt.AlignCenter)
+            hint.setContentsMargins(0, 4, 0, 4)
+            self._task_layout.insertWidget(self._task_layout.count() - 1, hint)
 
         # "+ New Task" button at the bottom of the list
         add_btn = QPushButton("+ New Task")
@@ -1130,6 +1220,20 @@ class MainWindow(QMainWindow):
             return
         self._trigger_reload()
 
+    def _on_category_menu(self) -> None:
+        btn = self.sender()
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            f"QMenu {{ background: {BG3}; color: {TEXT}; border: 1px solid {BORDER};"
+            f" border-radius: 4px; font-size: 10px; }}"
+            f" QMenu::item {{ padding: 4px 16px; }}"
+            f" QMenu::item:selected {{ background: {BG4}; }}"
+        )
+        menu.addAction("New category…", self._on_new_category)
+        menu.addAction("Rename category…", self._on_rename_category)
+        pos = btn.mapToGlobal(btn.rect().bottomLeft())
+        menu.exec_(pos)
+
     def _on_new_category(self) -> None:
         dlg = NewCategoryDialog(parent=self)
         if dlg.exec_() != QDialog.Accepted:
@@ -1142,6 +1246,24 @@ class MainWindow(QMainWindow):
             return
         # Refresh categories immediately so the next NewTaskDialog sees it
         self._categories = self._store.load_categories()
+
+    def _on_rename_category(self) -> None:
+        if not self._categories:
+            QMessageBox.information(self, "No categories", "No categories to rename.")
+            return
+        dlg = RenameCategoryDialog(self._categories, parent=self)
+        if dlg.exec_() != QDialog.Accepted:
+            return
+        old_name, new_name = dlg.values()
+        if old_name == new_name:
+            return
+        try:
+            self._store.rename_category(old_name, new_name)
+        except Exception as e:
+            QMessageBox.warning(self, "Failed to rename category", str(e))
+            return
+        self._categories = self._store.load_categories()
+        self._trigger_reload()
 
     # ── Tab management ───────────────────────────────────
 
@@ -1288,6 +1410,21 @@ class MainWindow(QMainWindow):
             tab.deleteLater()
         self._trigger_reload()
 
+    def _on_archive_task(self, task_name: str, archived: bool) -> None:
+        task = self._result.task_by_name(task_name) if self._result else None
+        if not task:
+            return
+        try:
+            self._store.set_archived(task.start_line, archived)
+        except Exception as e:
+            QMessageBox.warning(self, "Archive failed", str(e))
+            return
+        self._trigger_reload()
+
+    def _on_toggle_archived(self, checked: bool) -> None:
+        self._show_archived = checked
+        self._rebuild_task_rows()
+
     # ── Theme toggle ─────────────────────────────────────────
 
     def _on_toggle_theme(self) -> None:
@@ -1370,7 +1507,8 @@ class MainWindow(QMainWindow):
         if not self._result:
             QMessageBox.information(self, "Goals", "No data loaded yet.")
             return
-        dlg = GoalDialog(self._result.tasks, self._goals, parent=self)
+        active_tasks = [t for t in self._result.tasks if not t.archived]
+        dlg = GoalDialog(active_tasks, self._goals, parent=self)
         dlg.resize(600, 500)
         if dlg.exec_() == QDialog.Accepted:
             self._goals = dlg.get_goals()
@@ -1384,6 +1522,8 @@ class MainWindow(QMainWindow):
     # ── Helpers ──────────────────────────────────────────
 
     def _start_update_check(self) -> None:
+        if hasattr(self, '_update_thread'):
+            return   # already started on first build; don't restart on theme toggle
         from ..version import VERSION
         self._update_thread = QThread()
         self._update_worker = UpdateChecker()
