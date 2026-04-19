@@ -1,5 +1,5 @@
 from .sqlalchemy_base import Base
-from sqlalchemy import Column, String, Integer, DateTime, ForeignKey
+from sqlalchemy import Column, String, Integer, DateTime, Boolean, ForeignKey
 
 class Goal(Base):
     __tablename__ = "goals"
@@ -9,3 +9,5 @@ class Goal(Base):
     name = Column(String)
     target_hours = Column(Integer)
     by_date = Column(DateTime)
+    completed_on = Column(DateTime, nullable=True)
+    archived = Column(Boolean, server_default="0", nullable=False)

@@ -218,6 +218,8 @@ class DBStore:
                 db_task.name: GoalSpec(
                     hours=float(goal.target_hours or 0),
                     deadline=goal.by_date.date() if goal.by_date else None,
+                    completed_on=goal.completed_on.date() if goal.completed_on else None,
+                    archived=bool(goal.archived),
                 )
                 for goal, db_task in rows
             }
@@ -240,17 +242,25 @@ class DBStore:
                     datetime(gs.deadline.year, gs.deadline.month, gs.deadline.day)
                     if gs.deadline else None
                 )
+                completed_on = (
+                    datetime(gs.completed_on.year, gs.completed_on.month, gs.completed_on.day)
+                    if gs.completed_on else None
+                )
                 existing = db.query(DBGoal).filter_by(tasks_id=task_id).first()
                 if existing:
                     existing.target_hours = int(round(gs.hours))
                     existing.by_date      = by_date
                     existing.name         = task_name
+                    existing.completed_on = completed_on
+                    existing.archived     = gs.archived
                 else:
                     db.add(DBGoal(
                         tasks_id=task_id,
                         name=task_name,
                         target_hours=int(round(gs.hours)),
                         by_date=by_date,
+                        completed_on=completed_on,
+                        archived=gs.archived,
                     ))
             db.commit()
 

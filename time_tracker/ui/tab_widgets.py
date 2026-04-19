@@ -24,10 +24,15 @@ from .widgets import (
     label, h_line,
 )
 from .theme import (
-    BG, BG2, BG3, BORDER, TEXT, MUTED, FAINT,
+    BG, BG2, BG3, BORDER, BORDER2, TEXT, MUTED, FAINT,
     PAD_SM, PAD_MD, PAD_LG,
-    ACCENT, DANGER,
+    ACCENT, SUCCESS, WARNING, DANGER,
 )
+
+
+from PyQt5.QtGui import QPainter, QColor, QFont
+from PyQt5.QtCore import QTimer
+from datetime import timedelta
 
 
 def _today_seconds(tasks: list[Task]) -> float:
@@ -39,6 +44,212 @@ def _today_seconds(tasks: list[Task]) -> float:
             if s.start.date() == today:
                 total += s.duration_seconds
     return total
+
+
+# ──────────────────────────────────────────────────────────
+# Goal info panel (used inside Task tab)
+# ──────────────────────────────────────────────────────────
+
+class _GoalProgressBar(QWidget):
+    def __init__(self, color: str, parent=None):
+        super().__init__(parent)
+        self._pct = 0.0
+        self._color = color
+        self._text = ""
+        self.setFixedHeight(22)
+
+    def set(self, pct: float, text: str, color: str) -> None:
+        self._pct = min(1.0, max(0.0, pct))
+        self._text = text
+        self._color = color
+        self.update()
+
+    def paintEvent(self, _e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        w, h = self.width(), self.height()
+        p.fillRect(0, 0, w, h, QColor(BG3))
+        fill_w = int(self._pct * w)
+        c = QColor(self._color)
+        c.setAlphaF(0.65)
+        p.fillRect(0, 0, fill_w, h, c)
+        from PyQt5.QtGui import QPen
+        p.setPen(QPen(QColor(BORDER), 1))
+        p.drawRect(0, 0, w - 1, h - 1)
+        p.setPen(QColor(TEXT))
+        f = QFont("Consolas", 8)
+        f.setWeight(QFont.DemiBold)
+        p.setFont(f)
+        from PyQt5.QtCore import Qt as _Qt
+        p.drawText(0, 0, w, h, _Qt.AlignCenter, self._text)
+        p.end()
+
+
+class GoalInfoPanel(QWidget):
+    """Compact goal summary shown in the task tab when a goal is active."""
+
+    edit_requested   = pyqtSignal()
+    remove_requested = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setStyleSheet(
+            f"background: {BG2}; border: 1px solid {BORDER}; border-radius: 6px;"
+        )
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(12, 10, 12, 10)
+        lay.setSpacing(6)
+
+        # header row
+        hdr = QHBoxLayout()
+        hdr.setSpacing(8)
+        ttl = label("Goal", MUTED, size=9)
+        ttl.setStyleSheet(
+            f"color: {MUTED}; font-size: 9px; letter-spacing: 1px;"
+            f" text-transform: uppercase; background: transparent; border: none;"
+        )
+        hdr.addWidget(ttl)
+        self._badge = label("—", MUTED, size=9)
+        self._badge.setStyleSheet(
+            f"color: {MUTED}; font-size: 8px; padding: 1px 6px;"
+            f" border: 1px solid {MUTED}; border-radius: 3px;"
+            f" background: transparent; letter-spacing: 0.8px;"
+        )
+        hdr.addWidget(self._badge)
+        hdr.addStretch()
+
+        edit_btn = QPushButton("Edit")
+        edit_btn.setFixedHeight(22)
+        edit_btn.setStyleSheet(
+            f"QPushButton {{ background: transparent; color: {MUTED};"
+            f" border: 1px solid {BORDER}; border-radius: 3px;"
+            f" font-size: 9px; padding: 0 8px; }}"
+            f" QPushButton:hover {{ color: {TEXT}; border-color: {BORDER2}; }}"
+        )
+        edit_btn.clicked.connect(self.edit_requested)
+        hdr.addWidget(edit_btn)
+
+        rm_btn = QPushButton("Remove")
+        rm_btn.setFixedHeight(22)
+        rm_btn.setStyleSheet(
+            f"QPushButton {{ background: transparent; color: {DANGER};"
+            f" border: 1px solid {DANGER}; border-radius: 3px;"
+            f" font-size: 9px; padding: 0 8px; }}"
+            f" QPushButton:hover {{ background: {DANGER}; color: #fff; }}"
+        )
+        rm_btn.clicked.connect(self.remove_requested)
+        hdr.addWidget(rm_btn)
+        lay.addLayout(hdr)
+
+        # progress bar
+        self._bar_color = "#5B8DEF"
+        self._bar = _GoalProgressBar(self._bar_color)
+        lay.addWidget(self._bar)
+
+        # stats row
+        stats = QHBoxLayout()
+        stats.setSpacing(16)
+
+        self._lbl_done     = self._stat_col(stats, "DONE")
+        self._lbl_target   = self._stat_col(stats, "TARGET")
+        self._lbl_deadline = self._stat_col(stats, "DEADLINE")
+        self._lbl_pace     = self._stat_col(stats, "PACE NEEDED")
+        self._lbl_avg      = self._stat_col(stats, "AVG 7D")
+        stats.addStretch()
+        lay.addLayout(stats)
+
+    def _stat_col(self, parent_lay: QHBoxLayout, title: str) -> QLabel:
+        col = QWidget()
+        col.setStyleSheet("background: transparent;")
+        cl = QVBoxLayout(col)
+        cl.setContentsMargins(0, 0, 0, 0)
+        cl.setSpacing(1)
+        t = label(title, MUTED, size=8)
+        t.setStyleSheet(
+            f"color: {MUTED}; font-size: 8px; letter-spacing: 0.8px;"
+            f" background: transparent; border: none;"
+        )
+        v = label("—", TEXT, size=10)
+        v.setStyleSheet(
+            f"color: {TEXT}; font-size: 10px; font-family: Consolas, monospace;"
+            f" background: transparent; border: none;"
+        )
+        cl.addWidget(t)
+        cl.addWidget(v)
+        parent_lay.addWidget(col)
+        return v
+
+    def refresh(self, task: Task) -> None:
+        pct      = task.goal_progress()
+        done_h   = task.total_hours
+        goal_h   = task.goal_hours
+        req_hpd  = task.required_daily_hours()
+        dl_days  = task.deadline_days_left()
+
+        # avg 7-day
+        today = date.today()
+        seven_ago = today - timedelta(days=6)
+        total_7 = task.hours_in_range(seven_ago, today)
+        active_days_7 = len({
+            s.date for s in task.sessions
+            if seven_ago <= s.date <= today and not s.is_open
+        })
+        avg7 = total_7 / active_days_7 if active_days_7 else 0.0
+
+        # status badge
+        if pct >= 1.0:
+            status, s_color = "DONE", SUCCESS
+        elif req_hpd is None:
+            status, s_color = "IN PROGRESS", MUTED
+        elif avg7 >= req_hpd:
+            status, s_color = "ON TRACK", SUCCESS
+        elif dl_days is not None and dl_days < 5:
+            status, s_color = "CRITICAL", DANGER
+        else:
+            status, s_color = "BEHIND", WARNING
+
+        self._badge.setText(status)
+        self._badge.setStyleSheet(
+            f"color: {s_color}; font-size: 8px; padding: 1px 6px;"
+            f" border: 1px solid {s_color}; border-radius: 3px;"
+            f" background: transparent; letter-spacing: 0.8px;"
+        )
+
+        self._bar.set(pct, f"{done_h:.1f}h / {goal_h:.0f}h  ·  {int(pct*100)}%", task.colour)
+
+        self._lbl_done.setText(f"{done_h:.1f}h")
+        self._lbl_target.setText(f"{goal_h:.0f}h")
+
+        if task.goal_deadline:
+            self._lbl_deadline.setText(
+                task.goal_deadline.strftime("%d %b %Y")
+                + (f"  ({dl_days}d)" if dl_days is not None and dl_days >= 0 else "  (passed)")
+            )
+        else:
+            self._lbl_deadline.setText("no deadline")
+
+        if req_hpd is not None:
+            pace_color = SUCCESS if avg7 >= req_hpd else WARNING
+            self._lbl_pace.setText(f"{req_hpd:.2f} h/day")
+            self._lbl_pace.setStyleSheet(
+                f"color: {pace_color}; font-size: 10px; font-family: Consolas, monospace;"
+                f" background: transparent; border: none;"
+            )
+        elif pct >= 1.0:
+            self._lbl_pace.setText("complete")
+            self._lbl_pace.setStyleSheet(
+                f"color: {SUCCESS}; font-size: 10px; font-family: Consolas, monospace;"
+                f" background: transparent; border: none;"
+            )
+        else:
+            self._lbl_pace.setText("—")
+            self._lbl_pace.setStyleSheet(
+                f"color: {MUTED}; font-size: 10px; font-family: Consolas, monospace;"
+                f" background: transparent; border: none;"
+            )
+
+        self._lbl_avg.setText(f"{avg7:.2f} h/day")
 
 
 # ──────────────────────────────────────────────────────────
@@ -175,6 +386,8 @@ class TaskTabWidget(QWidget):
     edit_session_requested   = pyqtSignal(int, object, object)  # id, start, end
     delete_session_requested = pyqtSignal(int, bool)             # id, is_open
     add_session_requested    = pyqtSignal(int)                   # task_id
+    edit_goal_requested      = pyqtSignal(str)                   # task_name
+    remove_goal_requested    = pyqtSignal(str)                   # task_name
 
     def __init__(self, task: Task, parent=None):
         super().__init__(parent)
@@ -281,6 +494,18 @@ class TaskTabWidget(QWidget):
         vsplit.addWidget(self._pace_panel)
 
         lay.addWidget(vsplit)
+
+        # Goal info panel (shown only when task has an active goal)
+        self._goal_panel = GoalInfoPanel()
+        self._goal_panel.edit_requested.connect(
+            lambda: self.edit_goal_requested.emit(self._task.name)
+        )
+        self._goal_panel.remove_requested.connect(
+            lambda: self.remove_goal_requested.emit(self._task.name)
+        )
+        self._goal_panel.setVisible(False)
+        lay.addWidget(self._goal_panel)
+
         scroll.setWidget(inner)
 
         outer = QVBoxLayout(self)
@@ -326,5 +551,9 @@ class TaskTabWidget(QWidget):
         self._tod_chart.refresh_task(ts)
         self._pace_chart.refresh_task(ts)
 
-        # Show/hide pace panel
-        self._pace_panel.setVisible(task.goal_hours > 0)
+        # Show/hide goal elements
+        has_goal = task.goal_hours > 0
+        self._pace_panel.setVisible(has_goal)
+        self._goal_panel.setVisible(has_goal)
+        if has_goal:
+            self._goal_panel.refresh(task)

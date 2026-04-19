@@ -32,13 +32,14 @@ from ..charts.panels import (
     CategoryBreakdownChart,
 )
 from .widgets import (
-    MetricCard, InsightStrip, ChartPanel, CollapsibleSection,
-    RangeSlider, TaskRow, GoalRow, PresetBar,
+    MetricCard, InsightStrip, ChartPanel,
+    RangeSlider, TaskRow, PresetBar,
     h_line, v_line, label, card_frame, make_chart_panel,
     EditSessionDialog, AddSessionDialog,
 )
 from .tab_widgets import CategoryTabWidget, TaskTabWidget
 from .calendar_widget import CalendarWidget
+from .goals_tab import GoalsTab
 from .theme import (
     BG, BG2, BG3, BG4, BORDER, BORDER2,
     TEXT, MUTED, FAINT, ACCENT, SUCCESS, WARNING, DANGER,
@@ -94,15 +95,199 @@ class UpdateChecker(QObject):
 
 
 # ──────────────────────────────────────────────────────────
-# Goal dialog  (hours + optional deadline)
+# Goal dialogs  (add / edit a single goal)
 # ──────────────────────────────────────────────────────────
 
-class GoalDialog(QDialog):
-    def __init__(self, tasks: list[Task],
-                 goals: dict[str, GoalSpec], parent=None):
+_SPIN_CSS = (
+    f"QDoubleSpinBox {{ background: {BG3}; color: {TEXT};"
+    f" border: 1px solid {BORDER}; border-radius: 5px;"
+    f" padding: 4px 10px; font-size: 11px; }}"
+    f" QDoubleSpinBox:focus {{ border-color: {ACCENT}; }}"
+)
+_DATE_CSS = (
+    f"QDateEdit {{ background: {BG3}; color: {TEXT};"
+    f" border: 1px solid {BORDER}; border-radius: 5px;"
+    f" padding: 4px 10px; font-size: 11px; }}"
+    f" QDateEdit:focus {{ border-color: {ACCENT}; }}"
+)
+
+
+def _make_goal_form(root: QVBoxLayout, task_name: str,
+                    task_colour: str, task_total_hours: float,
+                    gs: GoalSpec) -> tuple[QDoubleSpinBox, QDateEdit, QLabel, QLabel]:
+    """Shared form body for add/edit goal dialogs. Returns (spin, date_edit, pace_lbl, no_dl_lbl)."""
+
+    root.addWidget(label("Target hours", MUTED, size=10))
+    spin = QDoubleSpinBox()
+    spin.setRange(0.5, 9999)
+    spin.setSingleStep(0.5)
+    spin.setValue(gs.hours if gs.hours > 0 else 10.0)
+    spin.setStyleSheet(_SPIN_CSS)
+    root.addWidget(spin)
+
+    root.addWidget(label("Deadline (optional)", MUTED, size=10))
+
+    # "No deadline" checkbox + date picker
+    no_dl_row = QHBoxLayout()
+    no_dl_row.setSpacing(PAD_SM)
+    no_dl_chk = QPushButton("No deadline")
+    no_dl_chk.setCheckable(True)
+    no_dl_chk.setChecked(gs.deadline is None)
+    no_dl_chk.setFixedHeight(30)
+    no_dl_chk.setStyleSheet(
+        f"QPushButton {{ background: {BG3}; color: {MUTED}; border: 1px solid {BORDER};"
+        f" border-radius: 5px; font-size: 10px; padding: 0 10px; }}"
+        f" QPushButton:checked {{ background: {ACCENT}; color: #fff; border-color: {ACCENT}; }}"
+    )
+    no_dl_row.addWidget(no_dl_chk)
+    de = QDateEdit()
+    de.setCalendarPopup(True)
+    de.setDisplayFormat("dd MMM yyyy")
+    de.setStyleSheet(_DATE_CSS)
+    de.setEnabled(gs.deadline is not None)
+    if gs.deadline:
+        de.setDate(QDate(gs.deadline.year, gs.deadline.month, gs.deadline.day))
+    else:
+        de.setDate(QDate.currentDate().addMonths(1))
+    no_dl_row.addWidget(de, stretch=1)
+    root.addLayout(no_dl_row)
+
+    no_dl_chk.toggled.connect(lambda checked: de.setEnabled(not checked))
+
+    # Live pace label
+    pace_lbl = QLabel("—")
+    pace_lbl.setStyleSheet(f"color: {MUTED}; font-size: 11px; background: transparent;")
+    root.addWidget(pace_lbl)
+
+    def _update_pace():
+        h        = spin.value()
+        done     = task_total_hours
+        if no_dl_chk.isChecked():
+            if done >= h:
+                pace_lbl.setText("Goal already reached!")
+                pace_lbl.setStyleSheet(f"color: {SUCCESS}; font-size: 11px; background: transparent;")
+            else:
+                pace_lbl.setText(f"{h - done:.1f}h remaining · no deadline")
+                pace_lbl.setStyleSheet(f"color: {MUTED}; font-size: 11px; background: transparent;")
+            return
+        qd        = de.date()
+        dl        = date(qd.year(), qd.month(), qd.day())
+        days_left = (dl - date.today()).days
+        if done >= h:
+            pace_lbl.setText("Goal already reached!")
+            pace_lbl.setStyleSheet(f"color: {SUCCESS}; font-size: 11px; background: transparent;")
+        elif days_left <= 0:
+            pace_lbl.setText("Deadline has passed!")
+            pace_lbl.setStyleSheet(f"color: {DANGER}; font-size: 11px; background: transparent;")
+        else:
+            req = (h - done) / days_left
+            col = SUCCESS if req <= 2 else (WARNING if req <= 4 else DANGER)
+            pace_lbl.setText(f"{req:.2f} h/day needed · {days_left}d left")
+            pace_lbl.setStyleSheet(f"color: {col}; font-size: 11px; background: transparent;")
+
+    spin.valueChanged.connect(lambda _: _update_pace())
+    de.dateChanged.connect(lambda _: _update_pace())
+    no_dl_chk.toggled.connect(lambda _: _update_pace())
+    _update_pace()
+
+    return spin, de, pace_lbl, no_dl_chk
+
+
+class AddGoalDialog(QDialog):
+    """Pick a task and set hours + optional deadline."""
+
+    def __init__(self, tasks: list[Task], goals: dict[str, GoalSpec], parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Edit Goals")
-        self.setMinimumWidth(540)
+        self.setWindowTitle("New Goal")
+        self.setFixedWidth(380)
+        self.setStyleSheet(
+            f"background: {BG}; color: {TEXT};"
+            f" QLabel {{ background: transparent; }}"
+        )
+        self._tasks = tasks
+        self._spin: Optional[QDoubleSpinBox] = None
+        self._de:   Optional[QDateEdit]      = None
+        self._no_dl: Optional[QPushButton]   = None
+
+        root = QVBoxLayout(self)
+        root.setSpacing(PAD_SM)
+
+        root.addWidget(label("Task", MUTED, size=10))
+        self._task_combo = QComboBox()
+        self._task_combo.setStyleSheet(_COMBO_CSS)
+        for t in tasks:
+            self._task_combo.addItem(f"● {t.name}", userData=t.name)
+            idx = self._task_combo.count() - 1
+            self._task_combo.setItemData(idx, QColor(t.colour), Qt.ForegroundRole)
+        root.addWidget(self._task_combo)
+
+        root.addWidget(h_line())
+
+        self._form_slot = QVBoxLayout()
+        self._form_slot.setContentsMargins(0, 0, 0, 0)
+        self._form_slot.setSpacing(0)
+        self._form_container: Optional[QWidget] = None
+        root.addLayout(self._form_slot)
+
+        root.addStretch()
+
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btns.setStyleSheet(f"color: {TEXT};")
+        btns.accepted.connect(self._on_accept)
+        btns.rejected.connect(self.reject)
+        root.addWidget(btns)
+
+        self._goals = goals
+        self._task_combo.currentIndexChanged.connect(self._rebuild_form)
+        self._rebuild_form()
+
+    def _rebuild_form(self) -> None:
+        # Destroy the old container entirely — avoids layout-item leak
+        if self._form_container is not None:
+            self._form_slot.removeWidget(self._form_container)
+            self._form_container.deleteLater()
+            self._form_container = None
+            self._spin = self._de = self._no_dl = None
+
+        task_name = self._task_combo.currentData()
+        t = next((x for x in self._tasks if x.name == task_name), None)
+        if not t:
+            return
+
+        self._form_container = QWidget()
+        self._form_container.setStyleSheet("background: transparent;")
+        form_lay = QVBoxLayout(self._form_container)
+        form_lay.setContentsMargins(0, 0, 0, 0)
+        form_lay.setSpacing(PAD_SM)
+        self._form_slot.addWidget(self._form_container)
+
+        gs = self._goals.get(t.name, GoalSpec())
+        self._spin, self._de, _, self._no_dl = _make_goal_form(
+            form_lay, t.name, t.colour, t.total_hours, gs
+        )
+
+    def _on_accept(self) -> None:
+        if self._spin is None:
+            return
+        self.accept()
+
+    def values(self) -> tuple[str, GoalSpec]:
+        task_name = self._task_combo.currentData()
+        if self._no_dl.isChecked():
+            dl = None
+        else:
+            qd = self._de.date()
+            dl = date(qd.year(), qd.month(), qd.day())
+        return task_name, GoalSpec(hours=self._spin.value(), deadline=dl)
+
+
+class EditGoalDialog(QDialog):
+    """Edit hours + deadline for a specific task goal."""
+
+    def __init__(self, task: Task, gs: GoalSpec, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Edit Goal — {task.name}")
+        self.setFixedWidth(380)
         self.setStyleSheet(
             f"background: {BG}; color: {TEXT};"
             f" QLabel {{ background: transparent; }}"
@@ -111,110 +296,11 @@ class GoalDialog(QDialog):
         root = QVBoxLayout(self)
         root.setSpacing(PAD_SM)
 
-        root.addWidget(label(
-            "Set a target hours and optional deadline per task.", MUTED, size=10
-        ))
-        root.addWidget(h_line())
-
-        # Header row
-        hdr = QHBoxLayout()
-        for txt, stretch in [("Task", 2), ("Target hours", 1),
-                              ("Deadline (optional)", 1), ("Pace needed", 1)]:
-            hdr.addWidget(label(txt, FAINT, size=9), stretch)
-        root.addLayout(hdr)
-        root.addWidget(h_line())
-
-        self._rows: dict[str, tuple[QDoubleSpinBox, QDateEdit, QLabel]] = {}
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setStyleSheet(
-            f"QScrollArea {{ border: none; background: {BG}; }}"
+        self._spin, self._de, _, self._no_dl = _make_goal_form(
+            root, task.name, task.colour, task.total_hours, gs
         )
-        inner = QWidget()
-        inner.setStyleSheet(f"background: {BG};")
-        form  = QVBoxLayout(inner)
-        form.setSpacing(4)
 
-        for t in tasks:
-            gs   = goals.get(t.name, GoalSpec())
-            row  = QHBoxLayout()
-
-            # Task name
-            name_lbl = label(f"● {t.name}", t.colour, size=10)
-            row.addWidget(name_lbl, 2)
-
-            # Hours spin
-            spin = QDoubleSpinBox()
-            spin.setRange(0, 9999)
-            spin.setSingleStep(0.5)
-            spin.setValue(gs.hours)
-            spin.setStyleSheet(
-                f"background: {BG3}; color: {TEXT}; border: 1px solid {BORDER};"
-                f" border-radius: 5px; padding: 2px 6px; font-size: 10px;"
-            )
-            row.addWidget(spin, 1)
-
-            # Date picker
-            de = QDateEdit()
-            de.setCalendarPopup(True)
-            de.setDisplayFormat("dd MMM yyyy")
-            de.setStyleSheet(
-                f"background: {BG3}; color: {TEXT}; border: 1px solid {BORDER};"
-                f" border-radius: 5px; padding: 2px 6px; font-size: 10px;"
-            )
-            if gs.deadline:
-                de.setDate(QDate(gs.deadline.year,
-                                 gs.deadline.month, gs.deadline.day))
-            else:
-                de.setDate(QDate.currentDate().addMonths(1))
-            de.setSpecialValueText("No deadline")
-            row.addWidget(de, 1)
-
-            # Computed pace label
-            pace_lbl = QLabel("—")
-            pace_lbl.setStyleSheet(
-                f"color: {MUTED}; font-size: 10px;"
-                f" background: transparent;"
-            )
-            row.addWidget(pace_lbl, 1)
-
-            def _update_pace(_, _s=spin, _d=de, _l=pace_lbl, _t=t):
-                h   = _s.value()
-                qd  = _d.date()
-                dl  = date(qd.year(), qd.month(), qd.day())
-                days_left = (dl - date.today()).days
-                done = _t.total_hours
-                if h > 0 and done < h and days_left > 0:
-                    req = (h - done) / days_left
-                    col = SUCCESS if req <= 2 else (WARNING if req <= 4 else DANGER)
-                    _l.setText(f"{req:.1f}h/day")
-                    _l.setStyleSheet(
-                        f"color: {col}; font-size: 10px; background: transparent;"
-                    )
-                elif h > 0 and done >= h:
-                    _l.setText("Done!")
-                    _l.setStyleSheet(
-                        f"color: {SUCCESS}; font-size: 10px; background: transparent;"
-                    )
-                else:
-                    _l.setText("—")
-
-            spin.valueChanged.connect(_update_pace)
-            de.dateChanged.connect(_update_pace)
-            _update_pace(None)
-
-            self._rows[t.name] = (spin, de, pace_lbl)
-
-            w = QWidget()
-            w.setStyleSheet("background: transparent;")
-            w.setLayout(row)
-            form.addWidget(w)
-
-        form.addStretch()
-        inner.setLayout(form)
-        scroll.setWidget(inner)
-        root.addWidget(scroll, stretch=1)
+        root.addStretch()
 
         btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         btns.setStyleSheet(f"color: {TEXT};")
@@ -222,16 +308,13 @@ class GoalDialog(QDialog):
         btns.rejected.connect(self.reject)
         root.addWidget(btns)
 
-    def get_goals(self) -> dict[str, GoalSpec]:
-        result: dict[str, GoalSpec] = {}
-        for name, (spin, de, _) in self._rows.items():
-            qd = de.date()
+    def values(self) -> GoalSpec:
+        if self._no_dl.isChecked():
+            dl = None
+        else:
+            qd = self._de.date()
             dl = date(qd.year(), qd.month(), qd.day())
-            result[name] = GoalSpec(
-                hours    = spin.value(),
-                deadline = dl if spin.value() > 0 else None,
-            )
-        return result
+        return GoalSpec(hours=self._spin.value(), deadline=dl)
 
 
 # ──────────────────────────────────────────────────────────
@@ -265,6 +348,15 @@ _INPUT_CSS = (
     f" padding: 4px 10px; font-size: 11px; }}"
     f" QLineEdit:focus {{ border-color: {ACCENT}; }}"
 )
+
+
+def _goal_is_archived(gs: GoalSpec, today: date) -> bool:
+    """A goal is archived if manually archived OR completed 3+ days ago."""
+    if gs.archived:
+        return True
+    if gs.completed_on is not None and (today - gs.completed_on).days >= 3:
+        return True
+    return False
 
 
 def _swatch_for_tag(colour_tag: str) -> str:
@@ -538,6 +630,7 @@ class MainWindow(QMainWindow):
         self._category_tabs: dict[str, CategoryTabWidget] = {}
         self._task_tabs:     dict[str, TaskTabWidget]     = {}
         self._cal_tab:       Optional[CalendarWidget]     = None
+        self._goals_tab:     Optional[GoalsTab]           = None
 
         self._date_low  = 0
         self._date_high = 0
@@ -725,15 +818,15 @@ class MainWindow(QMainWindow):
         task_scroll.setWidget(self._task_container)
         ll.addWidget(task_scroll, stretch=1)
 
-        # Goal progress section
-        self._goals_section = CollapsibleSection("Goal Progress")
-        self._goals_inner   = QWidget()
-        self._goals_inner.setStyleSheet("background: transparent;")
-        self._goals_inner_layout = QVBoxLayout(self._goals_inner)
-        self._goals_inner_layout.setContentsMargins(0, 0, 0, 0)
-        self._goals_inner_layout.setSpacing(2)
-        self._goals_section.add_widget(self._goals_inner)
-        ll.addWidget(self._goals_section)
+        # ── Compact top-3 goals strip ──────────────────────
+        self._goals_strip = QWidget()
+        self._goals_strip.setStyleSheet(
+            f"background: {BG2}; border-top: 1px solid {BORDER};"
+        )
+        self._goals_strip_layout = QVBoxLayout(self._goals_strip)
+        self._goals_strip_layout.setContentsMargins(8, 6, 8, 6)
+        self._goals_strip_layout.setSpacing(2)
+        ll.addWidget(self._goals_strip)
 
         splitter.addWidget(left)
 
@@ -762,8 +855,16 @@ class MainWindow(QMainWindow):
         self._cal_tab = CalendarWidget(store=self._store)
         self._cal_tab.reload_needed.connect(self._trigger_reload)
         self._tabs.addTab(self._cal_tab, "Calendar")
-        # Prevent the Calendar tab from being closable
         self._tabs.tabBar().setTabButton(1, self._tabs.tabBar().RightSide, None)
+
+        self._goals_tab = GoalsTab()
+        self._goals_tab.open_goal_dialog.connect(self._on_edit_goals)
+        self._goals_tab.task_clicked.connect(self._open_task_tab)
+        self._goals_tab.edit_goal.connect(self._on_edit_single_goal)
+        self._goals_tab.cancel_goal.connect(self._on_cancel_goal)
+        self._goals_tab.archive_goal.connect(self._on_archive_goal)
+        self._tabs.addTab(self._goals_tab, "Goals")
+        self._tabs.tabBar().setTabButton(2, self._tabs.tabBar().RightSide, None)
 
         splitter.addWidget(self._tabs)
         splitter.setSizes([390, 1210])
@@ -880,6 +981,7 @@ class MainWindow(QMainWindow):
         self._refresh_all()
         if self._cal_tab:
             self._cal_tab.refresh(result)
+        self._rebuild_goal_rows()
 
     def _on_reload_error(self, msg: str) -> None:
         self._updated_lbl.setText("Error — see console")
@@ -902,10 +1004,25 @@ class MainWindow(QMainWindow):
     def _apply_goals_to_tasks(self) -> None:
         if not self._result:
             return
+        goals_changed = False
         for t in self._result.tasks:
             gs = self._goals.get(t.name, GoalSpec())
             t.goal_hours    = gs.hours
             t.goal_deadline = gs.deadline
+            # Mark completion date when goal first reaches 100%
+            if gs.hours > 0 and t.goal_progress() >= 1.0 and gs.completed_on is None:
+                gs = GoalSpec(
+                    hours=gs.hours,
+                    deadline=gs.deadline,
+                    completed_on=date.today(),
+                )
+                self._goals[t.name] = gs
+                goals_changed = True
+        if goals_changed and self._result:
+            try:
+                self._store.save_goals(self._goals, self._result.tasks)
+            except Exception:
+                pass
 
     # ── Task rows ────────────────────────────────────────
 
@@ -983,47 +1100,119 @@ class MainWindow(QMainWindow):
         self._rebuild_goal_rows()
 
     def _rebuild_goal_rows(self) -> None:
-        while self._goals_inner_layout.count():
-            item = self._goals_inner_layout.takeAt(0)
+        if not self._result:
+            return
+        # Pass ALL tasks with goals to GoalsTab — it handles filtering internally
+        all_goal_tasks = [
+            t for t in self._result.tasks
+            if t.goal_hours > 0
+        ]
+        if self._goals_tab:
+            self._goals_tab.refresh(all_goal_tasks, self._goals)
+
+        # Sidebar strip shows only active (non-archived, non-auto-archived) goals
+        today = date.today()
+        active_tasks = [
+            t for t in all_goal_tasks
+            if not _goal_is_archived(self._goals.get(t.name, GoalSpec()), today)
+        ]
+        self._rebuild_goals_strip(active_tasks)
+
+    def _rebuild_goals_strip(self, tasks_with_goals: list) -> None:
+        """Compact top-3 goals by completion % shown at the bottom of the left panel."""
+        while self._goals_strip_layout.count():
+            item = self._goals_strip_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
 
-        if not self._result:
+        if not tasks_with_goals:
+            self._goals_strip.setVisible(False)
             return
 
-        tasks_with_goals = [t for t in self._result.tasks
-                            if t.goal_hours > 0]
-        if not tasks_with_goals:
-            self._goals_inner_layout.addWidget(
-                label("No goals set yet.", FAINT, size=9)
-            )
-        else:
-            stats   = self._current_stats()
-            tracker = GoalTracker(self._result.tasks, stats) if stats else None
+        self._goals_strip.setVisible(True)
 
-            for t in tasks_with_goals:
-                row = GoalRow(t.name, t.colour)
-                daily_avg = tracker.daily_avg_hours(t.name) if tracker else 0
-                row.update(
-                    progress      = t.goal_progress(),
-                    goal_hours    = t.goal_hours,
-                    daily_avg     = daily_avg,
-                    req_hpd       = t.required_daily_hours(),
-                    deadline_days = t.deadline_days_left(),
-                )
-                self._goals_inner_layout.addWidget(row)
-
-        # "Edit Goals…" button always at the bottom
-        edit_goals_btn = QPushButton("Edit Goals…")
-        edit_goals_btn.setFixedHeight(28)
-        edit_goals_btn.setStyleSheet(
-            f"QPushButton {{ background: transparent; color: {FAINT};"
-            f" border: 1px dashed {BORDER}; border-radius: 5px;"
-            f" font-size: 10px; margin: 4px 0px; }}"
-            f" QPushButton:hover {{ color: {MUTED}; border-color: {BORDER2}; }}"
+        # header row
+        hdr = QHBoxLayout()
+        hdr.setSpacing(4)
+        h_lbl = QLabel("Top Goals")
+        h_lbl.setStyleSheet(
+            f"color: {MUTED}; font-size: 9px; font-weight: 600; letter-spacing: 0.5px;"
+            f" background: transparent; border: none;"
         )
-        edit_goals_btn.clicked.connect(self._on_edit_goals)
-        self._goals_inner_layout.addWidget(edit_goals_btn)
+        hdr.addWidget(h_lbl)
+        hdr.addStretch()
+        see_all = QPushButton("See all →")
+        see_all.setFlat(True)
+        see_all.setStyleSheet(
+            f"color: {ACCENT}; font-size: 9px; background: transparent; border: none;"
+        )
+        see_all.setCursor(Qt.PointingHandCursor)
+        see_all.clicked.connect(lambda: self._switch_to_goals_tab())
+        hdr.addWidget(see_all)
+        self._goals_strip_layout.addLayout(hdr)
+
+        # top-3 by completion %
+        top3 = sorted(tasks_with_goals, key=lambda t: t.goal_progress(), reverse=True)[:3]
+        for t in top3:
+            pct  = t.goal_progress()
+            row  = QWidget()
+            row.setStyleSheet("background: transparent;")
+            rl   = QVBoxLayout(row)
+            rl.setContentsMargins(0, 2, 0, 2)
+            rl.setSpacing(2)
+
+            name_row = QHBoxLayout()
+            name_row.setSpacing(4)
+            dot = QLabel("●")
+            dot.setStyleSheet(
+                f"color: {t.colour}; font-size: 9px; background: transparent; border: none;"
+            )
+            dot.setFixedWidth(10)
+            name_row.addWidget(dot)
+            name_lbl = QLabel(t.name)
+            name_lbl.setStyleSheet(
+                f"color: {TEXT}; font-size: 9px; background: transparent; border: none;"
+            )
+            name_row.addWidget(name_lbl, stretch=1)
+            pct_lbl = QLabel(f"{int(pct * 100)}%")
+            pct_color = SUCCESS if pct >= 1.0 else (WARNING if pct >= 0.5 else MUTED)
+            pct_lbl.setStyleSheet(
+                f"color: {pct_color}; font-size: 9px; font-family: Consolas, monospace;"
+                f" background: transparent; border: none;"
+            )
+            name_row.addWidget(pct_lbl)
+            rl.addLayout(name_row)
+
+            # mini progress bar
+            bar = QWidget()
+            bar.setFixedHeight(3)
+            bar.setStyleSheet(f"background: {BG3}; border-radius: 1px;")
+            bar_fill = QWidget(bar)
+            fill_w = max(3, int(pct * (bar.sizeHint().width() or 200)))
+            bar_fill.setStyleSheet(f"background: {t.colour}; border-radius: 1px;")
+            bar.setMinimumWidth(50)
+
+            # We use a layout-based approach for the mini bar
+            bar_outer = QWidget()
+            bar_outer.setFixedHeight(4)
+            bar_outer.setStyleSheet(f"background: {BG3}; border-radius: 2px;")
+            bar_lay = QHBoxLayout(bar_outer)
+            bar_lay.setContentsMargins(0, 0, 0, 0)
+            bar_lay.setSpacing(0)
+            fill = QWidget()
+            fill.setFixedHeight(4)
+            fill.setStyleSheet(f"background: {t.colour}; border-radius: 2px;")
+            bar_lay.addWidget(fill, stretch=int(pct * 100))
+            bar_lay.addStretch(max(1, 100 - int(pct * 100)))
+            rl.addWidget(bar_outer)
+
+            self._goals_strip_layout.addWidget(row)
+
+    def _switch_to_goals_tab(self) -> None:
+        for i in range(self._tabs.count()):
+            if self._tabs.widget(i) is self._goals_tab:
+                self._tabs.setCurrentIndex(i)
+                break
 
     # ── Chart refresh ────────────────────────────────────
 
@@ -1284,8 +1473,8 @@ class MainWindow(QMainWindow):
         if not self._result:
             return
 
-        # Insert category tabs after Overview (0) and Calendar (1), before any task tabs
-        insert_at = 2
+        # Insert category tabs after Overview (0), Calendar (1), Goals (2)
+        insert_at = 3
         seen: set[str] = set()
         for t in self._result.tasks:
             if t.tag and t.tag not in seen:
@@ -1323,6 +1512,8 @@ class MainWindow(QMainWindow):
         tab.edit_session_requested.connect(self._on_edit_session)
         tab.delete_session_requested.connect(self._on_delete_session)
         tab.add_session_requested.connect(self._on_add_session)
+        tab.edit_goal_requested.connect(self._on_edit_single_goal)
+        tab.remove_goal_requested.connect(self._on_cancel_goal)
         display = task_name if len(task_name) <= 14 else task_name[:13] + "…"
         self._tabs.addTab(tab, display)
         self._task_tabs[task_name] = tab
@@ -1504,18 +1695,95 @@ class MainWindow(QMainWindow):
     # ── Goals ────────────────────────────────────────────
 
     def _on_edit_goals(self) -> None:
+        """Open the Add Goal dialog (called by + New Goal button)."""
         if not self._result:
             QMessageBox.information(self, "Goals", "No data loaded yet.")
             return
-        active_tasks = [t for t in self._result.tasks if not t.archived]
-        dlg = GoalDialog(active_tasks, self._goals, parent=self)
-        dlg.resize(600, 500)
+        today = date.today()
+        # Exclude archived tasks and auto-archived completed goals
+        eligible = [
+            t for t in self._result.tasks
+            if not t.archived
+            and not (
+                t.name in self._goals
+                and self._goals[t.name].completed_on is not None
+                and (today - self._goals[t.name].completed_on).days >= 3
+            )
+        ]
+        dlg = AddGoalDialog(eligible, self._goals, parent=self)
         if dlg.exec_() == QDialog.Accepted:
-            self._goals = dlg.get_goals()
+            task_name, gs = dlg.values()
+            existing = self._goals.get(task_name, GoalSpec())
+            self._goals[task_name] = GoalSpec(
+                hours=gs.hours,
+                deadline=gs.deadline,
+                completed_on=existing.completed_on,
+            )
             try:
                 self._store.save_goals(self._goals, self._result.tasks)
             except Exception as e:
-                QMessageBox.warning(self, "Failed to save goals", str(e))
+                QMessageBox.warning(self, "Failed to save goal", str(e))
+            self._apply_goals_to_tasks()
+            self._rebuild_goal_rows()
+
+    def _on_edit_single_goal(self, task_name: str) -> None:
+        """Open the Edit Goal dialog for a specific task."""
+        if not self._result:
+            return
+        task = next((t for t in self._result.tasks if t.name == task_name), None)
+        if not task:
+            return
+        gs = self._goals.get(task_name, GoalSpec())
+        dlg = EditGoalDialog(task, gs, parent=self)
+        if dlg.exec_() == QDialog.Accepted:
+            new_gs = dlg.values()
+            self._goals[task_name] = GoalSpec(
+                hours=new_gs.hours,
+                deadline=new_gs.deadline,
+                completed_on=gs.completed_on,
+            )
+            try:
+                self._store.save_goals(self._goals, self._result.tasks)
+            except Exception as e:
+                QMessageBox.warning(self, "Failed to save goal", str(e))
+            self._apply_goals_to_tasks()
+            self._rebuild_goal_rows()
+
+    def _on_cancel_goal(self, task_name: str) -> None:
+        """Remove the goal for a task after confirmation."""
+        reply = QMessageBox.question(
+            self, "Remove Goal",
+            f'Remove the goal for "{task_name}"?',
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        self._goals.pop(task_name, None)
+        if self._result:
+            try:
+                self._store.save_goals(self._goals, self._result.tasks)
+            except Exception as e:
+                QMessageBox.warning(self, "Failed to remove goal", str(e))
+            self._apply_goals_to_tasks()
+            self._rebuild_goal_rows()
+
+    def _on_archive_goal(self, task_name: str) -> None:
+        """Toggle manual archive flag on a goal."""
+        gs = self._goals.get(task_name)
+        if gs is None:
+            return
+        self._goals[task_name] = GoalSpec(
+            hours=gs.hours,
+            deadline=gs.deadline,
+            completed_on=gs.completed_on,
+            archived=not gs.archived,
+        )
+        if self._result:
+            try:
+                self._store.save_goals(self._goals, self._result.tasks)
+            except Exception as e:
+                QMessageBox.warning(self, "Failed to archive goal", str(e))
             self._apply_goals_to_tasks()
             self._rebuild_goal_rows()
 

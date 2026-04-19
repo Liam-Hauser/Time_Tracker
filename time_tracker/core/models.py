@@ -77,8 +77,10 @@ class Session:
 @dataclass
 class GoalSpec:
     """Portable goal config stored on MainWindow and written onto Tasks."""
-    hours:    float     = 0.0
-    deadline: Optional[date] = None
+    hours:        float          = 0.0
+    deadline:     Optional[date] = None
+    completed_on: Optional[date] = None  # set when goal first reaches 100%
+    archived:     bool           = False  # manually archived by user
 
 
 @dataclass
