@@ -28,7 +28,7 @@ from PyQt5.QtWidgets import (
     QPushButton, QFrame, QLabel,
     QGraphicsView, QGraphicsScene, QGraphicsObject,
     QToolTip, QDialog, QDialogButtonBox, QComboBox,
-    QDateTimeEdit, QMessageBox,
+    QDateTimeEdit, QMessageBox, QLineEdit,
 )
 
 from ..core.models import Task, Session, fmt_dur
@@ -282,6 +282,12 @@ class _CalendarAddSessionDialog(QDialog):
             setattr(self, attr, w)
             root.addWidget(w)
 
+        root.addWidget(label("Note", MUTED, size=10))
+        self._note = QLineEdit()
+        self._note.setPlaceholderText("Optional note…")
+        self._note.setStyleSheet(_DT_CSS)
+        root.addWidget(self._note)
+
         root.addStretch()
         btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         btns.setStyleSheet(f"color: {TEXT};")
@@ -296,12 +302,12 @@ class _CalendarAddSessionDialog(QDialog):
             return
         self.accept()
 
-    def values(self) -> tuple[int, datetime, datetime]:
+    def values(self) -> tuple[int, datetime, datetime, str]:
         def _dt(q):
             d, t = q.date(), q.time()
             return datetime(d.year(), d.month(), d.day(),
                             t.hour(), t.minute(), t.second())
-        return self._combo.currentData(), _dt(self._s), _dt(self._e)
+        return self._combo.currentData(), _dt(self._s), _dt(self._e), self._note.text().strip()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -409,6 +415,16 @@ class _SessionItem(QGraphicsObject):
                     QPointF(PAD_L, time_top + fm_time.ascent()),
                     fm_time.elidedText(txt, Qt.ElideRight, int(avail_w)),
                 )
+
+                # Note — shown below time line when present and space allows
+                if self._sess.note:
+                    note_top = time_top + time_h + 2
+                    if h >= note_top + time_h:
+                        p.setPen(QColor(220, 220, 220, 140))
+                        p.drawText(
+                            QPointF(PAD_L, note_top + fm_time.ascent()),
+                            fm_time.elidedText(self._sess.note, Qt.ElideRight, int(avail_w)),
+                        )
 
         # ── Hover: delete button ──────────────────────────────────────────
         if self._hover:
@@ -838,12 +854,12 @@ class CalendarWidget(QWidget):
             QMessageBox.information(self, "Session active",
                 "Clock out first before editing an open session.")
             return
-        dlg = EditSessionDialog(sess.start, sess.end, parent=self)
+        dlg = EditSessionDialog(sess.start, sess.end, sess.note, parent=self)
         if dlg.exec_() != QDialog.Accepted:
             return
-        new_start, new_end = dlg.values()
+        new_start, new_end, new_note = dlg.values()
         try:
-            self._store.update_session(sess.line_index, new_start, new_end)
+            self._store.update_session(sess.line_index, new_start, new_end, new_note)
         except Exception as exc:
             QMessageBox.warning(self, "Edit failed", str(exc)); return
         self.reload_needed.emit()
@@ -876,9 +892,9 @@ class CalendarWidget(QWidget):
                                         parent=self)
         if dlg.exec_() != QDialog.Accepted:
             return
-        task_id, s, e = dlg.values()
+        task_id, s, e, note = dlg.values()
         try:
-            self._store.add_session(task_id, s, e)
+            self._store.add_session(task_id, s, e, note)
         except Exception as exc:
             QMessageBox.warning(self, "Add failed", str(exc)); return
         self.reload_needed.emit()

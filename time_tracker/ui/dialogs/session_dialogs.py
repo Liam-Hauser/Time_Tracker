@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from PyQt5.QtCore import QDateTime, QDate, QTime
-from PyQt5.QtWidgets import QVBoxLayout, QDateTimeEdit
+from PyQt5.QtWidgets import QVBoxLayout, QDateTimeEdit, QLineEdit
 
 from .base import BaseFormDialog
 from ..theme import DANGER, SS
@@ -25,9 +25,9 @@ def _dt_to_qdatetime(dt: datetime) -> QDateTime:
 
 
 class EditSessionDialog(BaseFormDialog):
-    """Edit the start and end times of an existing session."""
+    """Edit the start, end times, and note of an existing session."""
 
-    def __init__(self, start: datetime, end: datetime, parent=None):
+    def __init__(self, start: datetime, end: datetime, note: str = "", parent=None):
         super().__init__("Edit Session", width=360, parent=parent)
 
         self._root.addWidget(self._make_header("Edit Session"))
@@ -48,6 +48,13 @@ class EditSessionDialog(BaseFormDialog):
             setattr(self, attr, edit)
             lay.addWidget(edit)
 
+        lay.addWidget(self._field_label("Note"))
+        self._note_edit = QLineEdit()
+        self._note_edit.setPlaceholderText("Optional note…")
+        self._note_edit.setText(note)
+        self._note_edit.setStyleSheet(SS.input())
+        lay.addWidget(self._note_edit)
+
         lay.addStretch()
 
         footer, ok_btn, _ = self._make_footer("Save")
@@ -62,10 +69,11 @@ class EditSessionDialog(BaseFormDialog):
             return
         self.accept()
 
-    def values(self) -> tuple[datetime, datetime]:
+    def values(self) -> tuple[datetime, datetime, str]:
         return (
             _qdatetime_to_dt(self._start_edit.dateTime()),
             _qdatetime_to_dt(self._end_edit.dateTime()),
+            self._note_edit.text().strip(),
         )
 
 
@@ -93,6 +101,12 @@ class AddSessionDialog(BaseFormDialog):
             setattr(self, attr, edit)
             lay.addWidget(edit)
 
+        lay.addWidget(self._field_label("Note"))
+        self._note_edit = QLineEdit()
+        self._note_edit.setPlaceholderText("Optional note…")
+        self._note_edit.setStyleSheet(SS.input())
+        lay.addWidget(self._note_edit)
+
         lay.addStretch()
 
         footer, ok_btn, _ = self._make_footer("Add Session")
@@ -107,8 +121,9 @@ class AddSessionDialog(BaseFormDialog):
             return
         self.accept()
 
-    def values(self) -> tuple[datetime, datetime]:
+    def values(self) -> tuple[datetime, datetime, str]:
         return (
             _qdatetime_to_dt(self._start_edit.dateTime()),
             _qdatetime_to_dt(self._end_edit.dateTime()),
+            self._note_edit.text().strip(),
         )

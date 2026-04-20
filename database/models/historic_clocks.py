@@ -1,5 +1,5 @@
 from .sqlalchemy_base import Base
-from sqlalchemy import Column, Integer, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, DateTime, ForeignKey, Text
 
 class HistoricClock(Base):
     __tablename__ = "historic_clocks"
@@ -9,3 +9,4 @@ class HistoricClock(Base):
     total_sec = Column(Integer)
     start_time = Column(DateTime)
     end_time = Column(DateTime)
+    note = Column(Text, nullable=True)

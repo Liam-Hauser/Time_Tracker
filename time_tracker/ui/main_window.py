@@ -34,7 +34,8 @@ from ..charts.panels import (
 from .widgets import (
     MetricCard, InsightStrip, ChartPanel, PanelWidget,
     RangeSlider, TaskRow, PresetBar,
-    h_line, v_line, label, section_label, card_frame, make_chart_panel,
+    h_line, v_line, label, section_label, card_frame,
+    make_chart_panel, make_resizable_chart_panel, ResizableChartPanel,
     EditSessionDialog, AddSessionDialog,
 )
 from .dialogs import (
@@ -679,6 +680,26 @@ class MainWindow(QMainWindow):
         fl.addWidget(self._footer_time)
         ll.addWidget(footer)
 
+    def _on_export_all(self) -> None:
+        """Export all sessions across all tasks to CSV."""
+        from .widgets import export_sessions_to_csv
+        if not self._result:
+            return
+        rows = []
+        for t in self._result.tasks:
+            for s in t.sessions:
+                rows.append((
+                    s.start.strftime("%Y-%m-%d"),
+                    s.start.strftime("%H:%M"),
+                    s.end.strftime("%H:%M") if s.end else "",
+                    round(s.duration_seconds / 3600, 4),
+                    t.name,
+                    t.tag,
+                    s.note,
+                ))
+        rows.sort(key=lambda r: r[0], reverse=True)
+        export_sessions_to_csv(rows, "all_sessions.csv", self)
+
     def _build_overview_tab(self) -> QWidget:
         """Build and return the overview scroll area."""
         scroll = QScrollArea()
@@ -689,6 +710,17 @@ class MainWindow(QMainWindow):
         cl = QVBoxLayout(right_inner)
         cl.setContentsMargins(PAD, PAD_MD, PAD_MD, PAD_MD)
         cl.setSpacing(PAD)
+
+        # Overview header with export button
+        ov_hdr = QHBoxLayout()
+        ov_hdr.addWidget(label("Overview", TEXT, bold=True, size=14))
+        ov_hdr.addStretch()
+        export_all_btn = QPushButton("Export CSV")
+        export_all_btn.setFixedHeight(24)
+        export_all_btn.setStyleSheet(SS.button("ghost"))
+        export_all_btn.clicked.connect(self._on_export_all)
+        ov_hdr.addWidget(export_all_btn)
+        cl.addLayout(ov_hdr)
 
         # Metric cards (5 across)
         mc_row = QHBoxLayout()
@@ -707,35 +739,32 @@ class MainWindow(QMainWindow):
         self._insight_strip = InsightStrip()
         cl.addWidget(self._insight_strip)
 
-        # Chart sections in a resizable vertical splitter
-        vsplit = QSplitter(Qt.Vertical)
-        vsplit.setChildrenCollapsible(False)
-        vsplit.setStyleSheet(
-            f"QSplitter::handle:vertical {{ background: {BORDER}; height: 3px; margin: 1px 0; }}"
-            f"QSplitter::handle:vertical:hover {{ background: {ACCENT}; }}"
+        _hs_css = (
+            f"QSplitter::handle:horizontal {{ background: {BORDER}; width: 4px; margin: 0 1px; }}"
+            f"QSplitter::handle:horizontal:hover {{ background: {ACCENT}; }}"
         )
 
         self._stacked_chart = StackedAreaChart()
-        vsplit.addWidget(make_chart_panel("Daily activity", self._stacked_chart))
+        cl.addWidget(make_resizable_chart_panel("Daily activity", self._stacked_chart, 220))
 
-        row2_w = QWidget()
-        row2_w.setStyleSheet(f"background: {BG};")
-        row2 = QHBoxLayout(row2_w)
-        row2.setContentsMargins(0, 0, 0, 0)
-        row2.setSpacing(PAD)
+        row2_panel = ResizableChartPanel("", default_height=220)
+        row2_split = QSplitter(Qt.Horizontal)
+        row2_split.setChildrenCollapsible(False)
+        row2_split.setStyleSheet(_hs_css)
         self._wd_chart = WeekdayBarChart()
-        row2.addWidget(make_chart_panel("Avg by weekday", self._wd_chart))
+        row2_split.addWidget(make_chart_panel("Avg by weekday", self._wd_chart))
         self._wc_chart = WeeklyCompChart()
-        row2.addWidget(make_chart_panel("This week vs last week", self._wc_chart))
-        vsplit.addWidget(row2_w)
+        row2_split.addWidget(make_chart_panel("This week vs last week", self._wc_chart))
+        row2_panel.add_widget(row2_split)
+        cl.addWidget(row2_panel)
 
         self._hm_chart = HourHeatmap()
-        vsplit.addWidget(make_chart_panel("Hour-of-day heatmap", self._hm_chart))
+        cl.addWidget(make_resizable_chart_panel("Hour-of-day heatmap", self._hm_chart, 220))
 
         self._cat_breakdown = CategoryPieChart()
-        vsplit.addWidget(make_chart_panel("Category breakdown", self._cat_breakdown))
+        cl.addWidget(make_resizable_chart_panel("Category breakdown", self._cat_breakdown, 220))
 
-        cl.addWidget(vsplit)
+        cl.addStretch()
         scroll.setWidget(right_inner)
         return scroll
 
@@ -898,7 +927,7 @@ class MainWindow(QMainWindow):
             collapsed = cat_name in self._collapsed_cats
 
             # Category header row
-            cat_row = QWidget()
+            cat_row = QWidget(self._task_container)
             cat_row.setCursor(Qt.PointingHandCursor)
             cat_row.setStyleSheet("QWidget { background: transparent; }")
             cr = QHBoxLayout(cat_row)
@@ -981,7 +1010,7 @@ class MainWindow(QMainWindow):
 
     def _make_sidebar_task_item(self, task, max_sec: float) -> QWidget:
         """Compact task item for the sidebar."""
-        item = QWidget()
+        item = QWidget(self._task_container)
         item.setCursor(Qt.PointingHandCursor)
         item.setObjectName(f"SidebarTask")
         item.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -991,7 +1020,7 @@ class MainWindow(QMainWindow):
         )
 
         il = QHBoxLayout(item)
-        il.setContentsMargins(28, 8, PAD_MD, 8)
+        il.setContentsMargins(44, 8, PAD_MD, 8)
         il.setSpacing(10)
 
         dot = QLabel("⬤")
@@ -1139,7 +1168,7 @@ class MainWindow(QMainWindow):
             pct = t.goal_progress()
             dl  = t.deadline_days_left()
 
-            row = QWidget()
+            row = QWidget(self._goals_strip)
             row.setCursor(Qt.PointingHandCursor)
             row.setStyleSheet("background: transparent;")
             rl = QVBoxLayout(row)
@@ -1171,13 +1200,13 @@ class MainWindow(QMainWindow):
             rl.addLayout(name_row)
 
             # Mini progress bar
-            bar_outer = QWidget()
+            bar_outer = QWidget(row)
             bar_outer.setFixedHeight(3)
             bar_outer.setStyleSheet(f"background: {BG3}; border-radius: 1px;")
             bar_lay = QHBoxLayout(bar_outer)
             bar_lay.setContentsMargins(0, 0, 0, 0)
             bar_lay.setSpacing(0)
-            fill = QWidget()
+            fill = QWidget(bar_outer)
             fill.setFixedHeight(3)
             fill.setStyleSheet(f"background: {t.colour}; border-radius: 1px;")
             bar_lay.addWidget(fill, stretch=max(1, int(pct * 100)))
@@ -1561,7 +1590,11 @@ class MainWindow(QMainWindow):
 
     def _on_toggle_archived(self, checked: bool) -> None:
         self._show_archived = checked
-        self._rebuild_task_rows()
+        self.setUpdatesEnabled(False)
+        try:
+            self._rebuild_task_rows()
+        finally:
+            self.setUpdatesEnabled(True)
 
     # ── Theme toggle ─────────────────────────────────────────
 
@@ -1593,21 +1626,21 @@ class MainWindow(QMainWindow):
         dlg = AddSessionDialog(parent=self)
         if dlg.exec_() != QDialog.Accepted:
             return
-        start_dt, end_dt = dlg.values()
+        start_dt, end_dt, note = dlg.values()
         try:
-            self._store.add_session(task_id, start_dt, end_dt)
+            self._store.add_session(task_id, start_dt, end_dt, note)
         except Exception as e:
             QMessageBox.warning(self, "Failed to add session", str(e))
             return
         self._trigger_reload()
 
-    def _on_edit_session(self, session_id: int, start, end) -> None:
-        dlg = EditSessionDialog(start, end, parent=self)
+    def _on_edit_session(self, session_id: int, start, end, note: str = "") -> None:
+        dlg = EditSessionDialog(start, end, note, parent=self)
         if dlg.exec_() != QDialog.Accepted:
             return
-        new_start, new_end = dlg.values()
+        new_start, new_end, new_note = dlg.values()
         try:
-            self._store.update_session(session_id, new_start, new_end)
+            self._store.update_session(session_id, new_start, new_end, new_note)
         except Exception as e:
             QMessageBox.warning(self, "Failed to update session", str(e))
             return

@@ -269,22 +269,22 @@ class ChartPanel(QWidget):
         outer.setSpacing(0)
 
         hdr = QFrame()
-        hdr.setFixedHeight(26)
+        hdr.setFixedHeight(30)
         hdr.setStyleSheet(
             f"QFrame {{ background: {BG3};"
             f" border-top-left-radius: {RADIUS_LG}px;"
             f" border-top-right-radius: {RADIUS_LG}px;"
             f" border: 1px solid {BORDER}; border-bottom: none; }}"
         )
-        hl = QHBoxLayout(hdr)
-        hl.setContentsMargins(PAD_MD, 0, PAD_MD, 0)
+        self._hl = QHBoxLayout(hdr)
+        self._hl.setContentsMargins(PAD_MD, 4, PAD_MD, 4)
         ttl = QLabel(title.upper())
         ttl.setStyleSheet(
             f"color: {MUTED}; font-size: 9px; font-family: {FONT_MONO};"
             f" letter-spacing: 1.0px; font-weight: 600; background: transparent;"
         )
-        hl.addWidget(ttl)
-        hl.addStretch()
+        self._hl.addWidget(ttl)
+        self._hl.addStretch()
         outer.addWidget(hdr)
 
         self._content = QFrame()
@@ -301,6 +301,132 @@ class ChartPanel(QWidget):
 
     def add_widget(self, w: QWidget) -> None:
         self._cl.addWidget(w)
+
+    def add_header_widget(self, w: QWidget) -> None:
+        """Append a widget to the right side of the panel header."""
+        self._hl.addWidget(w)
+
+
+# ──────────────────────────────────────────────────────────
+# Resizable chart panel  (drag handle at bottom grows page)
+# ──────────────────────────────────────────────────────────
+
+class ResizableChartPanel(QWidget):
+    """Chart panel whose height can be changed by dragging a handle at its bottom.
+
+    Changing the height emits a geometry update that causes a parent
+    QScrollArea (with setWidgetResizable=True) to grow the page, making
+    the content scrollable rather than capping at window height.
+
+    When *title* is empty the header bar is omitted and the panel acts as
+    a transparent wrapper — useful for containing a horizontal QSplitter
+    with two individually titled ChartPanels side by side.
+    """
+
+    _MIN_H = 80
+
+    def __init__(self, title: str, default_height: int = 200, parent=None):
+        super().__init__(parent)
+        from PyQt5.QtCore import QEvent as _QEvent
+        self._QEvent = _QEvent
+        self.setMinimumHeight(self._MIN_H)
+        self.setMaximumHeight(16_777_215)   # Qt QWIDGETSIZE_MAX
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        if title:
+            hdr = QFrame()
+            hdr.setFixedHeight(30)
+            hdr.setStyleSheet(
+                f"QFrame {{ background: {BG3};"
+                f" border-top-left-radius: {RADIUS_LG}px;"
+                f" border-top-right-radius: {RADIUS_LG}px;"
+                f" border: 1px solid {BORDER}; border-bottom: none; }}"
+            )
+            self._hl = QHBoxLayout(hdr)
+            self._hl.setContentsMargins(PAD_MD, 4, PAD_MD, 4)
+            ttl = QLabel(title.upper())
+            ttl.setStyleSheet(
+                f"color: {MUTED}; font-size: 9px; font-family: {FONT_MONO};"
+                f" letter-spacing: 1.0px; font-weight: 600; background: transparent;"
+            )
+            self._hl.addWidget(ttl)
+            self._hl.addStretch()
+            outer.addWidget(hdr)
+
+            content = QFrame()
+            content.setStyleSheet(
+                f"QFrame {{ background: {BG2};"
+                f" border-bottom-left-radius: {RADIUS_LG}px;"
+                f" border-bottom-right-radius: {RADIUS_LG}px;"
+                f" border: 1px solid {BORDER}; border-top: none; }}"
+            )
+            self._cl = QVBoxLayout(content)
+            self._cl.setContentsMargins(0, 0, 0, 0)
+            outer.addWidget(content, stretch=1)
+        else:
+            self._hl = None
+            plain = QWidget()
+            plain.setStyleSheet("background: transparent;")
+            self._cl = QVBoxLayout(plain)
+            self._cl.setContentsMargins(0, 0, 0, 0)
+            outer.addWidget(plain, stretch=1)
+
+        # Drag handle — thin strip at the very bottom
+        self._handle = QFrame()
+        self._handle.setObjectName("ResizeHandle")
+        self._handle.setFixedHeight(6)
+        self._handle.setCursor(Qt.SizeVerCursor)
+        self._handle.setStyleSheet(
+            f"QFrame#ResizeHandle {{ background: {BORDER}; border-radius: 3px; }}"
+            f"QFrame#ResizeHandle:hover {{ background: {BORDER2}; }}"
+        )
+        self._handle.setAttribute(Qt.WA_Hover, True)
+        self._handle.installEventFilter(self)
+        outer.addWidget(self._handle)
+
+        # Set height AFTER layout is built so the layout can calculate properly
+        self.setFixedHeight(default_height)
+
+        self._dragging = False
+        self._drag_y   = 0
+        self._drag_h   = 0
+
+    def eventFilter(self, obj, event) -> bool:
+        if obj is self._handle:
+            t = event.type()
+            if t == self._QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+                self._dragging = True
+                self._drag_y   = event.globalPos().y()
+                self._drag_h   = self.height()
+                return True
+            if t == self._QEvent.MouseMove and self._dragging:
+                dy    = event.globalPos().y() - self._drag_y
+                new_h = max(self._MIN_H, self._drag_h + dy)
+                self.setFixedHeight(new_h)
+                return True
+            if t == self._QEvent.MouseButtonRelease and self._dragging:
+                self._dragging = False
+                return True
+        return super().eventFilter(obj, event)
+
+    def add_widget(self, w: QWidget) -> None:
+        self._cl.addWidget(w)
+
+    def add_header_widget(self, w: QWidget) -> None:
+        if self._hl is not None:
+            self._hl.addWidget(w)
+
+
+def make_resizable_chart_panel(
+    title: str, chart_widget: QWidget, default_height: int = 220
+) -> ResizableChartPanel:
+    """Wrap a chart widget in a ResizableChartPanel."""
+    pan = ResizableChartPanel(title, default_height=default_height)
+    pan.add_widget(chart_widget)
+    return pan
 
 
 # ──────────────────────────────────────────────────────────
@@ -817,83 +943,85 @@ class GoalRow(QWidget):
 # Session table  (per-task tab)
 # ──────────────────────────────────────────────────────────
 
-class _SessionRow(QWidget):
-    """Single session row with a hover-revealed Edit button."""
+class _LogbookEntry(QWidget):
+    """A single session card in the logbook view."""
 
-    edit_requested   = pyqtSignal(int, object, object)
+    edit_requested   = pyqtSignal(int, object, object, str)
     delete_requested = pyqtSignal(int, bool)
 
     def __init__(self, session_id: int, is_open: bool,
-                 start, end, dur_str: str, parent=None):
+                 start, end, dur_str: str, note: str = "", parent=None):
         super().__init__(parent)
         self._id      = session_id
         self._is_open = is_open
         self._start   = start
         self._end     = end
+        self._note    = note
 
-        self.setObjectName("SessRow")
-        self.setStyleSheet(
-            f"#SessRow {{ border-bottom: 1px solid {BORDER};"
-            f" background: transparent; }}"
-            f"#SessRow:hover {{ background: {BG3}; }}"
-        )
+        self.setObjectName("LogEntry")
         self.setAttribute(Qt.WA_Hover, True)
+        self.setStyleSheet(
+            f"#LogEntry {{ background: {BG3}; border: 1px solid {BORDER};"
+            f" border-radius: {RADIUS}px; }}"
+            f"#LogEntry:hover {{ border-color: {BORDER2}; background: {BG4}; }}"
+        )
 
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(8, 5, 8, 5)
-        lay.setSpacing(0)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(12, 10, 12, 10)
+        root.setSpacing(6)
 
-        def _cell(text: str, width: int, colour: str = TEXT) -> QLabel:
-            lbl = QLabel(text)
-            lbl.setFixedWidth(width)
-            lbl.setStyleSheet(
-                f"color: {colour}; font-size: 11px;"
-                f" background: transparent; border: none;"
-            )
-            return lbl
+        # Top row: time range + duration on left, action buttons on right
+        top = QHBoxLayout()
+        top.setSpacing(8)
+        top.setContentsMargins(0, 0, 0, 0)
 
-        lay.addWidget(_cell(start.strftime("%Y-%m-%d"), 108))
-        lay.addWidget(_cell(start.strftime("%H:%M"), 72))
-        end_str = end.strftime("%H:%M") if end else "—"
-        lay.addWidget(_cell(end_str, 72, TEXT if end else MUTED))
-
-        dur_lbl = QLabel(dur_str)
-        dur_lbl.setStyleSheet(
-            f"color: {MUTED}; font-size: 11px;"
+        end_str = end.strftime("%H:%M") if end else "now"
+        status = " (active)" if is_open else ""
+        time_lbl = QLabel(f"{start.strftime('%H:%M')} – {end_str}  ·  {dur_str}{status}")
+        time_lbl.setStyleSheet(
+            f"color: {TEXT}; font-size: 12px; font-family: {FONT_MONO};"
             f" background: transparent; border: none;"
         )
-        lay.addWidget(dur_lbl, stretch=1)
+        top.addWidget(time_lbl, stretch=1)
 
-        # Action buttons — hidden until hover
         self._edit_btn = QPushButton("Edit")
         self._edit_btn.setFixedSize(46, 22)
         self._edit_btn.setStyleSheet(
             f"QPushButton {{ background: transparent; color: {MUTED};"
-            f" border: 1px solid {BORDER}; border-radius: 4px;"
-            f" font-size: 10px; }}"
-            f" QPushButton:hover {{ color: {TEXT}; background: {BG4};"
-            f" border-color: {BORDER2}; }}"
+            f" border: 1px solid {BORDER}; border-radius: 4px; font-size: 10px; }}"
+            f" QPushButton:hover {{ color: {TEXT}; background: {BG2}; border-color: {BORDER2}; }}"
         )
         self._edit_btn.setVisible(False)
         if not is_open:
             self._edit_btn.clicked.connect(
-                lambda: self.edit_requested.emit(self._id, self._start, self._end)
+                lambda: self.edit_requested.emit(self._id, self._start, self._end, self._note)
             )
-        lay.addWidget(self._edit_btn)
+        top.addWidget(self._edit_btn)
 
-        self._del_btn = QPushButton("Delete")
-        self._del_btn.setFixedSize(54, 22)
+        self._del_btn = QPushButton("×")
+        self._del_btn.setFixedSize(26, 22)
         self._del_btn.setStyleSheet(
             f"QPushButton {{ background: transparent; color: {DANGER};"
-            f" border: 1px solid {DANGER}; border-radius: 4px;"
-            f" font-size: 10px; }}"
+            f" border: 1px solid {DANGER}; border-radius: 4px; font-size: 14px; }}"
             f" QPushButton:hover {{ background: {DANGER_DIM}; }}"
         )
         self._del_btn.setVisible(False)
         self._del_btn.clicked.connect(
             lambda: self.delete_requested.emit(self._id, self._is_open)
         )
-        lay.addWidget(self._del_btn)
+        top.addWidget(self._del_btn)
+        root.addLayout(top)
+
+        # Note body — full multi-line display
+        if note:
+            note_lbl = QLabel(note)
+            note_lbl.setWordWrap(True)
+            note_lbl.setTextFormat(Qt.PlainText)
+            note_lbl.setStyleSheet(
+                f"color: {DIM}; font-size: 13px; font-family: {FONT_UI};"
+                f" background: transparent; border: none;"
+            )
+            root.addWidget(note_lbl)
 
     def enterEvent(self, e) -> None:
         if not self._is_open:
@@ -907,16 +1035,36 @@ class _SessionRow(QWidget):
         super().leaveEvent(e)
 
 
-class SessionTable(QWidget):
-    """Scrollable list of session rows for a single task.
+def export_sessions_to_csv(rows: list, filename_hint: str, parent=None) -> None:
+    """Open a save dialog and write session rows to CSV.
+
+    rows: list of (date_str, start_str, end_str, duration_h, task_name, category, note)
+    """
+    import csv
+    from PyQt5.QtWidgets import QFileDialog
+    path, _ = QFileDialog.getSaveFileName(
+        parent, "Export sessions", filename_hint, "CSV files (*.csv)"
+    )
+    if not path:
+        return
+    if not path.lower().endswith(".csv"):
+        path += ".csv"
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["Date", "Start", "End", "Duration (h)", "Task", "Category", "Note"])
+        w.writerows(rows)
+
+
+class LogbookWidget(QWidget):
+    """Scrollable logbook of session entries grouped by date.
 
     Signals
     -------
-    edit_requested(int, object, object)  — session_id, start datetime, end datetime
-    delete_requested(int, bool)          — session_id, is_open
+    edit_requested(int, object, object, str)  — session_id, start, end, note
+    delete_requested(int, bool)               — session_id, is_open
     """
 
-    edit_requested   = pyqtSignal(int, object, object)
+    edit_requested   = pyqtSignal(int, object, object, str)
     delete_requested = pyqtSignal(int, bool)
 
     def __init__(self, parent=None):
@@ -928,47 +1076,25 @@ class SessionTable(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # Header row
-        hdr = QFrame()
-        hdr.setFixedHeight(26)
-        hdr.setStyleSheet(
-            f"QFrame {{ background: {BG3}; border-bottom: 1px solid {BORDER}; }}"
-        )
-        hl = QHBoxLayout(hdr)
-        hl.setContentsMargins(PAD, 0, PAD, 0)
-        hl.setSpacing(0)
-        for txt, w in [("Date", 108), ("Start", 72), ("End", 72)]:
-            lbl = QLabel(txt.upper())
-            lbl.setFixedWidth(w)
-            lbl.setStyleSheet(
-                f"color: {MUTED}; font-size: 9px; font-family: {FONT_MONO};"
-                f" letter-spacing: 0.5px; background: transparent; border: none;"
-            )
-            hl.addWidget(lbl)
-        dur_hdr = QLabel("DURATION")
-        dur_hdr.setStyleSheet(
-            f"color: {MUTED}; font-size: 9px; font-family: {FONT_MONO};"
-            f" letter-spacing: 0.5px; background: transparent; border: none;"
-        )
-        hl.addWidget(dur_hdr, stretch=1)
-        root.addWidget(hdr)
-
-        # Scrollable rows
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setStyleSheet(SS.scrollarea() + f" QScrollArea {{ background: {BG2}; }}")
         self._container = QWidget()
         self._container.setStyleSheet(f"background: {BG2};")
         self._list_lay = QVBoxLayout(self._container)
-        self._list_lay.setContentsMargins(0, 0, 0, 0)
+        self._list_lay.setContentsMargins(8, 8, 8, 8)
         self._list_lay.setSpacing(0)
         self._list_lay.addStretch()
         scroll.setWidget(self._container)
         root.addWidget(scroll)
 
+        # Cached rows for CSV export: (date, start, end, dur_h, task, category, note)
+        self._export_rows: list = []
+
     def refresh(self, task, start, end) -> None:
         from ..core.models import fmt_dur
-        # Remove all existing rows (keep trailing stretch)
+        from collections import defaultdict
+
         while self._list_lay.count() > 1:
             item = self._list_lay.takeAt(0)
             if w := item.widget():
@@ -980,17 +1106,62 @@ class SessionTable(QWidget):
             key=lambda s: s.start,
             reverse=True,
         )
+
+        self._export_rows = []
+
+        # Group by date
+        by_date: dict = defaultdict(list)
         for s in sessions:
-            row = _SessionRow(
-                session_id=s.line_index,
-                is_open=s.is_open,
-                start=s.start,
-                end=s.end,
-                dur_str=fmt_dur(s.duration_seconds, short=True),
+            by_date[s.date].append(s)
+
+        insert_at = 0
+        for d in sorted(by_date.keys(), reverse=True):
+            # Date header
+            day_lbl = QLabel(d.strftime("%A, %d %b %Y"))
+            day_lbl.setStyleSheet(
+                f"color: {MUTED}; font-size: 10px; font-family: {FONT_MONO};"
+                f" letter-spacing: 0.5px; background: transparent; border: none;"
+                f" padding: 12px 4px 4px 4px;"
             )
-            row.edit_requested.connect(self.edit_requested)
-            row.delete_requested.connect(self.delete_requested)
-            self._list_lay.insertWidget(self._list_lay.count() - 1, row)
+            self._list_lay.insertWidget(insert_at, day_lbl)
+            insert_at += 1
+
+            for s in sorted(by_date[d], key=lambda x: x.start, reverse=True):
+                dur_str = fmt_dur(s.duration_seconds, short=True)
+                entry = _LogbookEntry(
+                    session_id=s.line_index,
+                    is_open=s.is_open,
+                    start=s.start,
+                    end=s.end,
+                    dur_str=dur_str,
+                    note=s.note,
+                    parent=self._container,
+                )
+                entry.edit_requested.connect(self.edit_requested)
+                entry.delete_requested.connect(self.delete_requested)
+                self._list_lay.insertWidget(insert_at, entry)
+                insert_at += 1
+
+                end_str = s.end.strftime("%H:%M") if s.end else ""
+                self._export_rows.append((
+                    d.strftime("%Y-%m-%d"),
+                    s.start.strftime("%H:%M"),
+                    end_str,
+                    round(s.duration_seconds / 3600, 4),
+                    task.name,
+                    task.tag,
+                    s.note,
+                ))
+
+            # Small spacer between date groups
+            spacer = QWidget(self._container)
+            spacer.setFixedHeight(4)
+            self._list_lay.insertWidget(insert_at, spacer)
+            insert_at += 1
+
+
+# Keep old name as alias so any code using SessionTable still compiles
+SessionTable = LogbookWidget
 
 
 # ──────────────────────────────────────────────────────────

@@ -52,6 +52,7 @@ class Session:
     start: datetime
     end: Optional[datetime]   # None = currently clocked in
     line_index: int           # holds DB clock record id
+    note: str = ""
 
     @property
     def db_id(self) -> int:

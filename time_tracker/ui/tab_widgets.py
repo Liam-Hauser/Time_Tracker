@@ -20,7 +20,8 @@ from ..charts.panels import (
     DailyBarChart, SessionHistogramChart, TimeOfDayBarChart, CumulativePaceChart,
 )
 from .widgets import (
-    MetricCard, InsightStrip, SessionTable, make_chart_panel,
+    MetricCard, InsightStrip, LogbookWidget, export_sessions_to_csv,
+    make_chart_panel, make_resizable_chart_panel, ResizableChartPanel,
     label, h_line,
 )
 from .theme import (
@@ -256,6 +257,10 @@ class CategoryTabWidget(QWidget):
         self._build()
 
     def _build(self) -> None:
+        self._cat_tasks: list = []
+        self._start: Optional[date] = None
+        self._end:   Optional[date] = None
+
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setStyleSheet(SS.scrollarea())
@@ -264,6 +269,18 @@ class CategoryTabWidget(QWidget):
         lay = QVBoxLayout(inner)
         lay.setContentsMargins(PAD, PAD_MD, PAD_MD, PAD_MD)
         lay.setSpacing(PAD)
+
+        # Category header row with export button
+        cat_hdr = QHBoxLayout()
+        cap = self.category_name[:1].upper() + self.category_name[1:]
+        cat_hdr.addWidget(label(cap, TEXT, bold=True, size=14))
+        cat_hdr.addStretch()
+        export_btn = QPushButton("Export CSV")
+        export_btn.setFixedHeight(24)
+        export_btn.setStyleSheet(SS.button("ghost"))
+        export_btn.clicked.connect(self._on_export)
+        cat_hdr.addWidget(export_btn)
+        lay.addLayout(cat_hdr)
 
         # Metric cards (4 across)
         mc_row = QHBoxLayout()
@@ -280,46 +297,65 @@ class CategoryTabWidget(QWidget):
         self._insight_strip = InsightStrip()
         lay.addWidget(self._insight_strip)
 
-        # Charts in a resizable vertical splitter
-        vsplit = QSplitter(Qt.Vertical)
-        vsplit.setChildrenCollapsible(False)
-        vsplit.setStyleSheet(
-            f"QSplitter::handle:vertical {{ background: {BORDER}; height: 3px; margin: 1px 0; }}"
-            f"QSplitter::handle:vertical:hover {{ background: {ACCENT}; }}"
+        _hs_css = (
+            f"QSplitter::handle:horizontal {{ background: {BORDER}; width: 4px; margin: 0 1px; }}"
+            f"QSplitter::handle:horizontal:hover {{ background: {ACCENT}; }}"
         )
 
         self._stacked_chart = StackedAreaChart()
-        vsplit.addWidget(make_chart_panel("Daily activity", self._stacked_chart))
+        lay.addWidget(make_resizable_chart_panel("Daily activity", self._stacked_chart, 220))
 
-        row2_w = QWidget()
-        row2_w.setStyleSheet(f"background: {BG};")
-        row2 = QHBoxLayout(row2_w)
-        row2.setContentsMargins(0, 0, 0, 0)
-        row2.setSpacing(PAD)
+        row2_panel = ResizableChartPanel("", default_height=220)
+        row2_split = QSplitter(Qt.Horizontal)
+        row2_split.setChildrenCollapsible(False)
+        row2_split.setStyleSheet(_hs_css)
         self._wd_chart = WeekdayBarChart()
-        row2.addWidget(make_chart_panel("Avg by weekday", self._wd_chart))
+        row2_split.addWidget(make_chart_panel("Avg by weekday", self._wd_chart))
         self._wc_chart = WeeklyCompChart()
-        row2.addWidget(make_chart_panel("This week vs last week", self._wc_chart))
-        vsplit.addWidget(row2_w)
+        row2_split.addWidget(make_chart_panel("This week vs last week", self._wc_chart))
+        row2_panel.add_widget(row2_split)
+        lay.addWidget(row2_panel)
 
         self._hm_chart = HourHeatmap()
-        vsplit.addWidget(make_chart_panel("Hour-of-day heatmap", self._hm_chart))
+        lay.addWidget(make_resizable_chart_panel("Hour-of-day heatmap", self._hm_chart, 220))
 
         self._pie_chart = CategoryPieChart()
-        vsplit.addWidget(make_chart_panel("Task breakdown", self._pie_chart))
+        lay.addWidget(make_resizable_chart_panel("Task breakdown", self._pie_chart, 220))
 
-        lay.addWidget(vsplit)
+        lay.addStretch()
         scroll.setWidget(inner)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(scroll)
 
+    def _on_export(self) -> None:
+        if not self._cat_tasks or self._start is None:
+            return
+        rows = []
+        for t in self._cat_tasks:
+            for s in t.sessions_in_range(self._start, self._end):
+                rows.append((
+                    s.start.strftime("%Y-%m-%d"),
+                    s.start.strftime("%H:%M"),
+                    s.end.strftime("%H:%M") if s.end else "",
+                    round(s.duration_seconds / 3600, 4),
+                    t.name,
+                    t.tag,
+                    s.note,
+                ))
+        rows.sort(key=lambda r: r[0], reverse=True)
+        cap = self.category_name[:1].upper() + self.category_name[1:]
+        export_sessions_to_csv(rows, f"{cap}_sessions.csv", self)
+
     def refresh(self, start: date, end: date,
                 all_tasks: list[Task], goals: dict) -> None:
         cat_tasks = [t for t in all_tasks if t.tag == self.category_name]
         if not cat_tasks:
             return
+        self._cat_tasks = cat_tasks
+        self._start     = start
+        self._end       = end
         stats = RangeStats(cat_tasks, start, end)
 
         import statistics as _stats
@@ -373,7 +409,7 @@ class TaskTabWidget(QWidget):
     """Detail view for a single task."""
 
     # Signals relayed up to MainWindow
-    edit_session_requested   = pyqtSignal(int, object, object)  # id, start, end
+    edit_session_requested   = pyqtSignal(int, object, object, str)  # id, start, end, note
     delete_session_requested = pyqtSignal(int, bool)             # id, is_open
     add_session_requested    = pyqtSignal(int)                   # task_id
     edit_goal_requested      = pyqtSignal(str)                   # task_name
@@ -413,7 +449,7 @@ class TaskTabWidget(QWidget):
         lay.addLayout(hdr)
         lay.addWidget(h_line())
 
-        # Metric cards (4 across)
+        # Metric cards
         mc_row = QHBoxLayout()
         mc_row.setSpacing(PAD)
         self._mc_today    = MetricCard("Today")
@@ -424,57 +460,7 @@ class TaskTabWidget(QWidget):
             mc_row.addWidget(mc)
         lay.addLayout(mc_row)
 
-        # Session table header with "Add session" button
-        sess_hdr = QHBoxLayout()
-        sess_hdr.addWidget(label("Sessions", TEXT, bold=True, size=10))
-        sess_hdr.addStretch()
-        add_sess_btn = QPushButton("+ Add session")
-        add_sess_btn.setFixedHeight(22)
-        add_sess_btn.setStyleSheet(SS.button("ghost"))
-        add_sess_btn.clicked.connect(
-            lambda: self.add_session_requested.emit(self._task.start_line)
-        )
-        sess_hdr.addWidget(add_sess_btn)
-        lay.addLayout(sess_hdr)
-
-        # Session table
-        self._session_table = SessionTable()
-        self._session_table.edit_requested.connect(self.edit_session_requested)
-        self._session_table.delete_requested.connect(self.delete_session_requested)
-        session_panel = make_chart_panel("All sessions", self._session_table)
-        lay.addWidget(session_panel)
-
-        # Charts in a resizable vertical splitter
-        vsplit = QSplitter(Qt.Vertical)
-        vsplit.setChildrenCollapsible(False)
-        vsplit.setStyleSheet(
-            f"QSplitter::handle:vertical {{ background: {BORDER}; height: 3px; margin: 1px 0; }}"
-            f"QSplitter::handle:vertical:hover {{ background: {ACCENT}; }}"
-        )
-
-        self._daily_chart = DailyBarChart()
-        vsplit.addWidget(make_chart_panel("Daily activity", self._daily_chart))
-
-        row2_w = QWidget()
-        row2_w.setStyleSheet(f"background: {BG};")
-        row2 = QHBoxLayout(row2_w)
-        row2.setContentsMargins(0, 0, 0, 0)
-        row2.setSpacing(PAD)
-        self._histogram = SessionHistogramChart()
-        row2.addWidget(make_chart_panel("Session length distribution",
-                                        self._histogram))
-        self._tod_chart = TimeOfDayBarChart()
-        row2.addWidget(make_chart_panel("Time of day", self._tod_chart))
-        vsplit.addWidget(row2_w)
-
-        self._pace_chart = CumulativePaceChart()
-        self._pace_panel = make_chart_panel("Cumulative progress vs goal",
-                                             self._pace_chart)
-        vsplit.addWidget(self._pace_panel)
-
-        lay.addWidget(vsplit)
-
-        # Goal info panel (shown only when task has an active goal)
+        # Goal info panel (hidden until task has a goal)
         self._goal_panel = GoalInfoPanel()
         self._goal_panel.edit_requested.connect(
             lambda: self.edit_goal_requested.emit(self._task.name)
@@ -485,6 +471,56 @@ class TaskTabWidget(QWidget):
         self._goal_panel.setVisible(False)
         lay.addWidget(self._goal_panel)
 
+        # ── Logbook ──────────────────────────────────────────────────────
+        self._session_table = LogbookWidget()
+        self._session_table.edit_requested.connect(self.edit_session_requested)
+        self._session_table.delete_requested.connect(self.delete_session_requested)
+        session_panel = ResizableChartPanel("Logbook", default_height=400)
+        session_panel.add_widget(self._session_table)
+
+        export_btn = QPushButton("Export CSV")
+        export_btn.setFixedHeight(20)
+        export_btn.setStyleSheet(SS.button("ghost"))
+        export_btn.clicked.connect(self._on_export)
+        session_panel.add_header_widget(export_btn)
+
+        add_sess_btn = QPushButton("+ Add session")
+        add_sess_btn.setFixedHeight(20)
+        add_sess_btn.setStyleSheet(SS.button("ghost"))
+        add_sess_btn.clicked.connect(
+            lambda: self.add_session_requested.emit(self._task.start_line)
+        )
+        session_panel.add_header_widget(add_sess_btn)
+        lay.addWidget(session_panel)
+
+        # ── Daily activity ────────────────────────────────────────────────
+        self._daily_chart = DailyBarChart()
+        lay.addWidget(make_resizable_chart_panel("Daily activity", self._daily_chart, 220))
+
+        # ── Histogram + time-of-day (horizontal splitter) ─────────────────
+        _hs_css = (
+            f"QSplitter::handle:horizontal {{ background: {BORDER}; width: 4px; margin: 0 1px; }}"
+            f"QSplitter::handle:horizontal:hover {{ background: {ACCENT}; }}"
+        )
+        row2_panel = ResizableChartPanel("", default_height=220)
+        row2_split = QSplitter(Qt.Horizontal)
+        row2_split.setChildrenCollapsible(False)
+        row2_split.setStyleSheet(_hs_css)
+        self._histogram = SessionHistogramChart()
+        row2_split.addWidget(make_chart_panel("Session length distribution", self._histogram))
+        self._tod_chart = TimeOfDayBarChart()
+        row2_split.addWidget(make_chart_panel("Time of day", self._tod_chart))
+        row2_panel.add_widget(row2_split)
+        lay.addWidget(row2_panel)
+
+        # ── Cumulative pace ───────────────────────────────────────────────
+        self._pace_chart = CumulativePaceChart()
+        self._pace_panel = make_resizable_chart_panel(
+            "Cumulative progress vs goal", self._pace_chart, 200
+        )
+        lay.addWidget(self._pace_panel)
+
+        lay.addStretch()
         scroll.setWidget(inner)
 
         outer = QVBoxLayout(self)
@@ -494,6 +530,10 @@ class TaskTabWidget(QWidget):
     def update_task(self, task: Task) -> None:
         """Replace internal task reference after a reload."""
         self._task = task
+
+    def _on_export(self) -> None:
+        rows = list(self._session_table._export_rows)
+        export_sessions_to_csv(rows, f"{self._task.name}_sessions.csv", self)
 
     def refresh(self, start: date, end: date) -> None:
         import statistics as _stats

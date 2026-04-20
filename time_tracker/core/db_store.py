@@ -69,6 +69,7 @@ class DBStore:
                             start=hc.start_time,
                             end=hc.end_time,
                             line_index=hc.id,   # repurposed: DB record id
+                            note=hc.note or "",
                         ))
 
                 cc = curr_by_task.get(db_task.id)
@@ -77,6 +78,7 @@ class DBStore:
                         start=cc.start_time,
                         end=None,
                         line_index=cc.id,       # repurposed: DB record id
+                        note=cc.note or "",
                     ))
 
                 tasks.append(Task(
@@ -315,7 +317,8 @@ class DBStore:
     # ── Session management ───────────────────────────────────
 
     def add_session(self, task_id: int,
-                    start_dt: datetime, end_dt: datetime) -> None:
+                    start_dt: datetime, end_dt: datetime,
+                    note: str = "") -> None:
         """Insert a manually-logged historic session."""
         from database.db import SessionLocal
         from database.models import HistoricClock
@@ -327,12 +330,14 @@ class DBStore:
                     total_sec=total_sec,
                     start_time=start_dt,
                     end_time=end_dt,
+                    note=note or None,
                 ))
                 db.commit()
 
     def update_session(self, session_id: int,
-                       new_start: datetime, new_end: datetime) -> None:
-        """Update start/end times of a HistoricClock record."""
+                       new_start: datetime, new_end: datetime,
+                       note: str = "") -> None:
+        """Update start/end times and note of a HistoricClock record."""
         from database.db import SessionLocal
         from database.models import HistoricClock
         with self._lock:
@@ -343,6 +348,7 @@ class DBStore:
                 hc.start_time = new_start
                 hc.end_time   = new_end
                 hc.total_sec  = int((new_end - new_start).total_seconds())
+                hc.note       = note or None
                 db.commit()
 
     def delete_session(self, session_id: int, is_open: bool = False) -> None:
