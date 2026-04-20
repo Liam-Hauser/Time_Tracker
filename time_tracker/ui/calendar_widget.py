@@ -131,7 +131,7 @@ def _percentile_colours(total_by_day: dict[date, float]) -> dict[date, str]:
 class ContributionGraph(QWidget):
     day_clicked = pyqtSignal(object)   # Python date
 
-    _MARGIN = 16   # horizontal margin on each side
+    _MARGIN = 12   # padding on each side
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -141,16 +141,15 @@ class ContributionGraph(QWidget):
         self.setMouseTracking(True)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
-    def _dyn_step(self) -> int:
-        """Cell step (cell+gap) sized to fill widget width, capped 12–22 px."""
-        avail = self.width() - _CG_LEFT - self._MARGIN * 2
-        step = max(_STEP, min(avail // _WEEKS, 22))
-        return step
+    def _dyn_step(self) -> float:
+        """Cell step sized via float division to fill width exactly."""
+        avail = max(1, self.width() - _CG_LEFT - self._MARGIN * 2)
+        return max(float(_STEP), avail / _WEEKS)
 
     def sizeHint(self):
         step = self._dyn_step()
-        return QSize(_CG_LEFT + _WEEKS * step + self._MARGIN * 2,
-                     _CG_TOP + 7 * step + 8)
+        return QSize(int(_CG_LEFT + _WEEKS * step + self._MARGIN * 2),
+                     int(_CG_TOP + 7 * step + 8))
 
     def minimumSizeHint(self):
         return self.sizeHint()
@@ -166,15 +165,16 @@ class ContributionGraph(QWidget):
 
     def _cell_rect(self, w: int, dow: int) -> QRect:
         step = self._dyn_step()
-        cell = step - 2
+        cell = max(1, int(step - 2))
         ox = self._MARGIN
-        return QRect(_CG_LEFT + ox + w * step, _CG_TOP + dow * step, cell, cell)
+        return QRect(int(_CG_LEFT + ox + w * step),
+                     int(_CG_TOP + dow * step), cell, cell)
 
     def _pos_to_date(self, x: int, y: int) -> Optional[date]:
         step = self._dyn_step()
         ox = self._MARGIN
-        col = (x - _CG_LEFT - ox) // step
-        row = (y - _CG_TOP)        // step
+        col = int((x - _CG_LEFT - ox) / step)
+        row = int((y - _CG_TOP) / step)
         if 0 <= col < _WEEKS and 0 <= row < 7:
             d = self._grid_start() + timedelta(weeks=col, days=row)
             if d <= date.today():
@@ -190,7 +190,7 @@ class ContributionGraph(QWidget):
         ox    = self._MARGIN
 
         # Update height to match dynamic step
-        new_h = _CG_TOP + 7 * step + 8
+        new_h = int(_CG_TOP + 7 * step + 8)
         if self.height() != new_h:
             self.setFixedHeight(new_h)
 
@@ -201,14 +201,15 @@ class ContributionGraph(QWidget):
             d = start + timedelta(weeks=w)
             if d.month != last_mo:
                 last_mo = d.month
-                p.drawText(_CG_LEFT + ox + w * step, _CG_TOP - 3,
+                p.drawText(int(_CG_LEFT + ox + w * step), _CG_TOP - 3,
                            _MONTH_NAMES[d.month - 1])
 
         fm = p.fontMetrics()
         for dow in (0, 2, 4):
             txt = _DAY_SHORT[dow][:3]
             tw = fm.horizontalAdvance(txt)
-            p.drawText(_CG_LEFT + ox - tw - 6, _CG_TOP + dow * step + step - 4, txt)
+            p.drawText(int(_CG_LEFT + ox - tw - 6),
+                       int(_CG_TOP + dow * step + step - 4), txt)
 
         for w in range(_WEEKS):
             for dow in range(7):
@@ -687,13 +688,15 @@ class WeekGridWidget(QGraphicsView):
         p.fillRect(QRect(0, _HDR_H, _T_COL, vh - _HDR_H), QColor(BG))
         p.setFont(QFont("", 8))
         p.setPen(QColor(FAINT))
+        fh = p.fontMetrics().height()
+        half = fh // 2 + 1
 
         for hour in range(1, 24):
             scene_y = int(self._hour_y(hour))
             vy      = scene_y - sv              # viewport y (no-zoom)
-            if _HDR_H <= vy <= vh - 8:
+            if _HDR_H <= vy <= vh - half:
                 p.drawText(
-                    QRect(6, vy - 7, _T_COL - 10, 14),
+                    QRect(0, vy - half, _T_COL - 2, fh + 2),
                     Qt.AlignRight | Qt.AlignVCenter,
                     f"{hour:02d}:00",
                 )

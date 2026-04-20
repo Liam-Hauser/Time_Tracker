@@ -21,7 +21,7 @@ from ..charts.panels import (
 )
 from .widgets import (
     MetricCard, InsightStrip, LogbookWidget, export_sessions_to_csv,
-    make_chart_panel, make_resizable_chart_panel, ResizableChartPanel,
+    ChartPanel, make_chart_panel, make_resizable_chart_panel, ResizableChartPanel,
     label, h_line,
 )
 from .theme import (
@@ -303,9 +303,9 @@ class CategoryTabWidget(QWidget):
         )
 
         self._stacked_chart = StackedAreaChart()
-        lay.addWidget(make_resizable_chart_panel("Daily activity", self._stacked_chart, 220))
+        lay.addWidget(make_resizable_chart_panel("Daily activity", self._stacked_chart))
 
-        row2_panel = ResizableChartPanel("", default_height=220)
+        row2_panel = ResizableChartPanel("")
         row2_split = QSplitter(Qt.Horizontal)
         row2_split.setChildrenCollapsible(False)
         row2_split.setStyleSheet(_hs_css)
@@ -317,10 +317,10 @@ class CategoryTabWidget(QWidget):
         lay.addWidget(row2_panel)
 
         self._hm_chart = HourHeatmap()
-        lay.addWidget(make_resizable_chart_panel("Hour-of-day heatmap", self._hm_chart, 220))
+        lay.addWidget(make_resizable_chart_panel("Hour-of-day heatmap", self._hm_chart))
 
         self._pie_chart = CategoryPieChart()
-        lay.addWidget(make_resizable_chart_panel("Task breakdown", self._pie_chart, 220))
+        lay.addWidget(make_resizable_chart_panel("Task breakdown", self._pie_chart))
 
         lay.addStretch()
         scroll.setWidget(inner)
@@ -471,7 +471,12 @@ class TaskTabWidget(QWidget):
         self._goal_panel.setVisible(False)
         lay.addWidget(self._goal_panel)
 
-        # ── Logbook ──────────────────────────────────────────────────────
+        _hs_css = (
+            f"QSplitter::handle:horizontal {{ background: {BORDER}; width: 4px; margin: 0 1px; }}"
+            f"QSplitter::handle:horizontal:hover {{ background: {ACCENT}; }}"
+        )
+
+        # ── Logbook ───────────────────────────────────────────────────────
         self._session_table = LogbookWidget()
         self._session_table.edit_requested.connect(self.edit_session_requested)
         self._session_table.delete_requested.connect(self.delete_session_requested)
@@ -479,13 +484,13 @@ class TaskTabWidget(QWidget):
         session_panel.add_widget(self._session_table)
 
         export_btn = QPushButton("Export CSV")
-        export_btn.setFixedHeight(20)
+        export_btn.setFixedHeight(26)
         export_btn.setStyleSheet(SS.button("ghost"))
         export_btn.clicked.connect(self._on_export)
         session_panel.add_header_widget(export_btn)
 
         add_sess_btn = QPushButton("+ Add session")
-        add_sess_btn.setFixedHeight(20)
+        add_sess_btn.setFixedHeight(26)
         add_sess_btn.setStyleSheet(SS.button("ghost"))
         add_sess_btn.clicked.connect(
             lambda: self.add_session_requested.emit(self._task.start_line)
@@ -495,14 +500,10 @@ class TaskTabWidget(QWidget):
 
         # ── Daily activity ────────────────────────────────────────────────
         self._daily_chart = DailyBarChart()
-        lay.addWidget(make_resizable_chart_panel("Daily activity", self._daily_chart, 220))
+        lay.addWidget(make_resizable_chart_panel("Daily activity", self._daily_chart))
 
         # ── Histogram + time-of-day (horizontal splitter) ─────────────────
-        _hs_css = (
-            f"QSplitter::handle:horizontal {{ background: {BORDER}; width: 4px; margin: 0 1px; }}"
-            f"QSplitter::handle:horizontal:hover {{ background: {ACCENT}; }}"
-        )
-        row2_panel = ResizableChartPanel("", default_height=220)
+        row2_panel = ResizableChartPanel("")
         row2_split = QSplitter(Qt.Horizontal)
         row2_split.setChildrenCollapsible(False)
         row2_split.setStyleSheet(_hs_css)
@@ -516,7 +517,7 @@ class TaskTabWidget(QWidget):
         # ── Cumulative pace ───────────────────────────────────────────────
         self._pace_chart = CumulativePaceChart()
         self._pace_panel = make_resizable_chart_panel(
-            "Cumulative progress vs goal", self._pace_chart, 200
+            "Cumulative progress vs goal", self._pace_chart
         )
         lay.addWidget(self._pace_panel)
 

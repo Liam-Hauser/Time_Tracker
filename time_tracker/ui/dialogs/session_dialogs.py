@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from PyQt5.QtCore import QDateTime, QDate, QTime
-from PyQt5.QtWidgets import QVBoxLayout, QDateTimeEdit, QLineEdit
+from PyQt5.QtWidgets import QVBoxLayout, QDateTimeEdit, QLineEdit, QTextEdit
 
 from .base import BaseFormDialog
 from ..theme import DANGER, SS
@@ -28,7 +28,7 @@ class EditSessionDialog(BaseFormDialog):
     """Edit the start, end times, and note of an existing session."""
 
     def __init__(self, start: datetime, end: datetime, note: str = "", parent=None):
-        super().__init__("Edit Session", width=360, parent=parent)
+        super().__init__("Edit Session", width=400, parent=parent)
 
         self._root.addWidget(self._make_header("Edit Session"))
         body, lay = self._make_body()
@@ -49,13 +49,12 @@ class EditSessionDialog(BaseFormDialog):
             lay.addWidget(edit)
 
         lay.addWidget(self._field_label("Note"))
-        self._note_edit = QLineEdit()
+        self._note_edit = QTextEdit()
         self._note_edit.setPlaceholderText("Optional note…")
-        self._note_edit.setText(note)
+        self._note_edit.setPlainText(note)
+        self._note_edit.setMinimumHeight(120)
         self._note_edit.setStyleSheet(SS.input())
         lay.addWidget(self._note_edit)
-
-        lay.addStretch()
 
         footer, ok_btn, _ = self._make_footer("Save")
         ok_btn.clicked.connect(self._on_accept)
@@ -73,7 +72,7 @@ class EditSessionDialog(BaseFormDialog):
         return (
             _qdatetime_to_dt(self._start_edit.dateTime()),
             _qdatetime_to_dt(self._end_edit.dateTime()),
-            self._note_edit.text().strip(),
+            self._note_edit.toPlainText().strip(),
         )
 
 
@@ -81,7 +80,7 @@ class AddSessionDialog(BaseFormDialog):
     """Log a manual session retroactively."""
 
     def __init__(self, parent=None):
-        super().__init__("Add Manual Session", width=360, parent=parent)
+        super().__init__("Add Manual Session", width=400, parent=parent)
 
         self._root.addWidget(self._make_header("Add Session"))
         body, lay = self._make_body()
@@ -102,12 +101,11 @@ class AddSessionDialog(BaseFormDialog):
             lay.addWidget(edit)
 
         lay.addWidget(self._field_label("Note"))
-        self._note_edit = QLineEdit()
+        self._note_edit = QTextEdit()
         self._note_edit.setPlaceholderText("Optional note…")
+        self._note_edit.setMinimumHeight(120)
         self._note_edit.setStyleSheet(SS.input())
         lay.addWidget(self._note_edit)
-
-        lay.addStretch()
 
         footer, ok_btn, _ = self._make_footer("Add Session")
         ok_btn.clicked.connect(self._on_accept)
@@ -125,5 +123,5 @@ class AddSessionDialog(BaseFormDialog):
         return (
             _qdatetime_to_dt(self._start_edit.dateTime()),
             _qdatetime_to_dt(self._end_edit.dateTime()),
-            self._note_edit.text().strip(),
+            self._note_edit.toPlainText().strip(),
         )

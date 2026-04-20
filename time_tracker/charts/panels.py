@@ -529,11 +529,26 @@ class HourHeatmap(NativeChart):
 
     def __init__(self, parent=None):
         super().__init__(fixed_height=200, parent=parent)
+        self._ideal_h = 200
+
+    def sizeHint(self):
+        from PyQt5.QtCore import QSize
+        return QSize(400, self._ideal_h)
 
     def refresh(self, stats: RangeStats) -> None:
         self._stats = stats
         n = len(stats.active_tasks)
-        self.setMinimumHeight(max(160, self._PAD[0] + n * 30 + self._PAD[2]))
+        # +1 row for the Total row
+        self._ideal_h = max(160, self._PAD[0] + (n + 1) * 30 + self._PAD[2])
+        self.setMinimumHeight(self._ideal_h)
+        self.setFixedHeight(self._ideal_h)
+        self.updateGeometry()
+        p = self.parentWidget()
+        while p is not None:
+            if hasattr(p, 'fit_to_content'):
+                p.fit_to_content()
+                break
+            p = p.parentWidget()
         self.update()
 
     def _paint(self, p: QPainter) -> None:
@@ -605,6 +620,47 @@ class HourHeatmap(NativeChart):
                     text_rgba = (0, 0, 0, 180) if lum > 140 else (255, 255, 255, 180)
                     p.setPen(QColor(*text_rgba))
                     p.drawText(cell, Qt.AlignCenter, f"{val:.1f}")
+
+        # ── Total row ────────────────────────────────────────────────────
+        total_row = n_tasks
+        y0_total  = pt + total_row * CELL_H
+
+        # Separator line above total row
+        p.setPen(QPen(QColor(BORDER2), 1))
+        p.drawLine(QPointF(chart_x, y0_total), QPointF(chart_x + chart_w, y0_total))
+
+        # "Total" label
+        p.setFont(_font(9, bold=True))
+        p.setPen(QColor(MUTED))
+        p.drawText(QRectF(pl + 12, y0_total, name_w - 12, CELL_H), Qt.AlignVCenter, "Total")
+
+        # Total seconds per hour across all tasks — scale against its own max
+        totals_by_hour = [
+            sum(stats.by_hour.get(h, {}).get(t.name, 0) / 3600 for t in active)
+            for h in range(24)
+        ]
+        max_total = max(totals_by_hour) if totals_by_hour else 1.0
+        max_total = max(max_total, 0.01)
+
+        for h in range(24):
+            total_val = totals_by_hour[h]
+            ratio = total_val / max_total
+            base = QColor(BG3)
+            tc   = QColor(ACCENT)
+            r = int(base.red()   + ratio * (tc.red()   - base.red()))
+            g = int(base.green() + ratio * (tc.green() - base.green()))
+            b = int(base.blue()  + ratio * (tc.blue()  - base.blue()))
+
+            cx   = chart_x + h * cell_w
+            cell = QRectF(cx + 1, y0_total + 2, cell_w - 2, CELL_H - 4)
+            p.setBrush(QColor(r, g, b))
+            p.setPen(Qt.NoPen)
+            p.drawRoundedRect(cell, 2, 2)
+
+            if cell_w > 22 and total_val >= 0.1:
+                p.setFont(_font(7))
+                p.setPen(QColor(255, 255, 255, 200))
+                p.drawText(cell, Qt.AlignCenter, f"{total_val:.1f}")
 
 
 # ──────────────────────────────────────────────────────────

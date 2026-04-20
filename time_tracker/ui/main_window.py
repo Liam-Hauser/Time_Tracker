@@ -745,9 +745,9 @@ class MainWindow(QMainWindow):
         )
 
         self._stacked_chart = StackedAreaChart()
-        cl.addWidget(make_resizable_chart_panel("Daily activity", self._stacked_chart, 220))
+        cl.addWidget(make_resizable_chart_panel("Daily activity", self._stacked_chart))
 
-        row2_panel = ResizableChartPanel("", default_height=220)
+        row2_panel = ResizableChartPanel("")
         row2_split = QSplitter(Qt.Horizontal)
         row2_split.setChildrenCollapsible(False)
         row2_split.setStyleSheet(_hs_css)
@@ -759,10 +759,10 @@ class MainWindow(QMainWindow):
         cl.addWidget(row2_panel)
 
         self._hm_chart = HourHeatmap()
-        cl.addWidget(make_resizable_chart_panel("Hour-of-day heatmap", self._hm_chart, 220))
+        cl.addWidget(make_resizable_chart_panel("Hour-of-day heatmap", self._hm_chart))
 
         self._cat_breakdown = CategoryPieChart()
-        cl.addWidget(make_resizable_chart_panel("Category breakdown", self._cat_breakdown, 220))
+        cl.addWidget(make_resizable_chart_panel("Category breakdown", self._cat_breakdown))
 
         cl.addStretch()
         scroll.setWidget(right_inner)
@@ -1140,7 +1140,10 @@ class MainWindow(QMainWindow):
         self._goals_strip.setVisible(True)
 
         # Header
-        hdr = QHBoxLayout()
+        hdr_w = QWidget()
+        hdr_w.setStyleSheet("background: transparent;")
+        hdr = QHBoxLayout(hdr_w)
+        hdr.setContentsMargins(0, 0, 0, 0)
         h_lbl = QLabel("GOALS")
         h_lbl.setStyleSheet(
             f"color: {MUTED}; font-size: 8px; font-family: {FONT_MONO};"
@@ -1156,7 +1159,7 @@ class MainWindow(QMainWindow):
         )
         see_all.clicked.connect(self._switch_to_goals_tab)
         hdr.addWidget(see_all)
-        self._goals_strip_layout.addLayout(hdr)
+        self._goals_strip_layout.addWidget(hdr_w)
 
         # Sort: tasks with deadlines first (nearest first), then rest
         def _sort_key(t):

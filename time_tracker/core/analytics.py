@@ -98,10 +98,24 @@ class RangeStats:
             }
 
         # hour (0-23) → {task_name: seconds}
+        # Each session is distributed across every clock-hour it spans so a
+        # 2-hour session from 09:30–11:30 contributes 30 min to h=9, 60 to
+        # h=10, and 30 to h=11 rather than dumping everything into h=9.
         self.by_hour: dict[int, dict[str, float]] = defaultdict(lambda: defaultdict(float))
         for t in tasks:
             for s in t.sessions_in_range(start, end):
-                self.by_hour[s.hour][t.name] += s.duration_seconds
+                s_start = s.start
+                s_end   = s.end if s.end else s.start  # open sessions: treat as zero-dur
+                if s_end <= s_start:
+                    continue
+                cur = s_start
+                while cur < s_end:
+                    hour_end = cur.replace(minute=0, second=0, microsecond=0)
+                    hour_end = hour_end + timedelta(hours=1)
+                    chunk_end = min(hour_end, s_end)
+                    secs = (chunk_end - cur).total_seconds()
+                    self.by_hour[cur.hour][t.name] += secs
+                    cur = chunk_end
 
         # total seconds per day (across all tasks)
         self.total_by_day: dict[date, float] = {

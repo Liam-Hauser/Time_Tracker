@@ -323,12 +323,14 @@ class ResizableChartPanel(QWidget):
     with two individually titled ChartPanels side by side.
     """
 
-    _MIN_H = 80
+    _MIN_H = 160
 
-    def __init__(self, title: str, default_height: int = 200, parent=None):
+    def __init__(self, title: str, default_height: int | None = None, parent=None):
         super().__init__(parent)
         from PyQt5.QtCore import QEvent as _QEvent
         self._QEvent = _QEvent
+        self._auto_height = (default_height is None)
+        self._height_initialized = False
         self.setMinimumHeight(self._MIN_H)
         self.setMaximumHeight(16_777_215)   # Qt QWIDGETSIZE_MAX
 
@@ -338,7 +340,7 @@ class ResizableChartPanel(QWidget):
 
         if title:
             hdr = QFrame()
-            hdr.setFixedHeight(30)
+            hdr.setFixedHeight(40)
             hdr.setStyleSheet(
                 f"QFrame {{ background: {BG3};"
                 f" border-top-left-radius: {RADIUS_LG}px;"
@@ -346,7 +348,7 @@ class ResizableChartPanel(QWidget):
                 f" border: 1px solid {BORDER}; border-bottom: none; }}"
             )
             self._hl = QHBoxLayout(hdr)
-            self._hl.setContentsMargins(PAD_MD, 4, PAD_MD, 4)
+            self._hl.setContentsMargins(PAD_MD, 7, PAD_MD, 7)
             ttl = QLabel(title.upper())
             ttl.setStyleSheet(
                 f"color: {MUTED}; font-size: 9px; font-family: {FONT_MONO};"
@@ -388,11 +390,24 @@ class ResizableChartPanel(QWidget):
         outer.addWidget(self._handle)
 
         # Set height AFTER layout is built so the layout can calculate properly
-        self.setFixedHeight(default_height)
+        self.setFixedHeight(default_height if default_height is not None else 300)
 
         self._dragging = False
         self._drag_y   = 0
         self._drag_h   = 0
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        if self._auto_height and not self._height_initialized:
+            self._height_initialized = True
+            from PyQt5.QtCore import QTimer as _QTimer
+            _QTimer.singleShot(0, self._apply_auto_height)
+
+    def _apply_auto_height(self):
+        w = self.width()
+        if w > 100:
+            h = max(240, min(int(w / 3.2), 540))
+            self.setFixedHeight(h)
 
     def eventFilter(self, obj, event) -> bool:
         if obj is self._handle:
@@ -405,12 +420,25 @@ class ResizableChartPanel(QWidget):
             if t == self._QEvent.MouseMove and self._dragging:
                 dy    = event.globalPos().y() - self._drag_y
                 new_h = max(self._MIN_H, self._drag_h + dy)
+                # Lock scroll position so the viewport doesn't jump
+                sa = self._find_scroll_area()
+                sv = sa.verticalScrollBar().value() if sa else None
                 self.setFixedHeight(new_h)
+                if sa and sv is not None:
+                    sa.verticalScrollBar().setValue(sv)
                 return True
             if t == self._QEvent.MouseButtonRelease and self._dragging:
                 self._dragging = False
                 return True
         return super().eventFilter(obj, event)
+
+    def _find_scroll_area(self):
+        p = self.parent()
+        while p:
+            if isinstance(p, QScrollArea):
+                return p
+            p = p.parent()
+        return None
 
     def add_widget(self, w: QWidget) -> None:
         self._cl.addWidget(w)
@@ -419,9 +447,18 @@ class ResizableChartPanel(QWidget):
         if self._hl is not None:
             self._hl.addWidget(w)
 
+    def fit_to_content(self) -> None:
+        """Resize to exactly fit the content's current sizeHint."""
+        overhead = 6  # drag handle
+        if self._hl is not None:
+            overhead += 34  # header bar
+        content_h = self._cl.sizeHint().height()
+        if content_h > 0:
+            self.setFixedHeight(max(self._MIN_H, content_h + overhead))
+
 
 def make_resizable_chart_panel(
-    title: str, chart_widget: QWidget, default_height: int = 220
+    title: str, chart_widget: QWidget, default_height: int | None = None
 ) -> ResizableChartPanel:
     """Wrap a chart widget in a ResizableChartPanel."""
     pan = ResizableChartPanel(title, default_height=default_height)
@@ -960,10 +997,11 @@ class _LogbookEntry(QWidget):
 
         self.setObjectName("LogEntry")
         self.setAttribute(Qt.WA_Hover, True)
+        self.setAttribute(Qt.WA_StyledBackground, True)
         self.setStyleSheet(
             f"#LogEntry {{ background: {BG3}; border: 1px solid {BORDER};"
             f" border-radius: {RADIUS}px; }}"
-            f"#LogEntry:hover {{ border-color: {BORDER2}; background: {BG4}; }}"
+            f"#LogEntry:hover {{ border: 1px solid {ACCENT}; background: {BG4}; }}"
         )
 
         root = QVBoxLayout(self)
@@ -1083,7 +1121,7 @@ class LogbookWidget(QWidget):
         self._container.setStyleSheet(f"background: {BG2};")
         self._list_lay = QVBoxLayout(self._container)
         self._list_lay.setContentsMargins(8, 8, 8, 8)
-        self._list_lay.setSpacing(0)
+        self._list_lay.setSpacing(4)
         self._list_lay.addStretch()
         scroll.setWidget(self._container)
         root.addWidget(scroll)
@@ -1153,9 +1191,9 @@ class LogbookWidget(QWidget):
                     s.note,
                 ))
 
-            # Small spacer between date groups
+            # Extra gap between date groups
             spacer = QWidget(self._container)
-            spacer.setFixedHeight(4)
+            spacer.setFixedHeight(6)
             self._list_lay.insertWidget(insert_at, spacer)
             insert_at += 1
 
