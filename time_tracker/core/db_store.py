@@ -1,9 +1,8 @@
 """
-core/db_store.py — PostgreSQL-backed data access.
-Replaces VaultParser / VaultWriter with database reads and writes.
+core/db_store.py — SQLite-backed data access via SQLAlchemy.
 
-Task.start_line  is repurposed to hold the DB tasks.id.
-Session.line_index is repurposed to hold the DB clock record id.
+Task.start_line  holds the DB tasks.id.
+Session.line_index holds the DB clock record id.
 """
 from __future__ import annotations
 
@@ -16,10 +15,19 @@ from .parser import ParseResult
 
 
 class DBStore:
-    """Thread-safe reads and writes against the PostgreSQL database."""
+    """Thread-safe reads and writes against the SQLite database."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
+
+    @staticmethod
+    def _get_task(db, task_id: int):
+        """Fetch a DB Task by id, raise ValueError if missing."""
+        from database.models import Task as DBTask
+        task = db.get(DBTask, task_id)
+        if task is None:
+            raise ValueError(f"Task id {task_id} not found")
+        return task
 
     # ── Load ─────────────────────────────────────────────────
 
@@ -110,9 +118,7 @@ class DBStore:
             with SessionLocal() as db:
                 if db.query(DBTask).filter_by(name=new_name).first():
                     raise ValueError(f"A task named '{new_name}' already exists")
-                task = db.get(DBTask, task_id)
-                if task is None:
-                    raise ValueError(f"Task id {task_id} not found")
+                task = self._get_task(db, task_id)
                 task.name = new_name
                 for goal in db.query(DBGoal).filter_by(tasks_id=task_id).all():
                     goal.name = new_name
@@ -124,9 +130,7 @@ class DBStore:
 
         with self._lock:
             with SessionLocal() as db:
-                task = db.get(DBTask, task_id)
-                if task is None:
-                    raise ValueError(f"Task id {task_id} not found")
+                task = self._get_task(db, task_id)
                 task.category = new_category
                 count = db.query(DBTask).filter_by(category=new_category).count()
                 colour_tag = CATEGORY_COLOUR_TAG.get(new_category, "none")
@@ -135,13 +139,10 @@ class DBStore:
 
     def set_archived(self, task_id: int, archived: bool) -> None:
         from database.db import SessionLocal
-        from database.models import Task as DBTask
 
         with self._lock:
             with SessionLocal() as db:
-                task = db.get(DBTask, task_id)
-                if task is None:
-                    raise ValueError(f"Task id {task_id} not found")
+                task = self._get_task(db, task_id)
                 task.archived = archived
                 db.commit()
 

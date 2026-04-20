@@ -11,9 +11,9 @@ from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QObject, QDate
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QScrollArea,
-    QFrame, QSplitter, QMessageBox, QTabWidget,
-    QDoubleSpinBox, QDialog, QDialogButtonBox,
-    QDateEdit, QLineEdit, QComboBox, QMenu,
+    QFrame, QSplitter, QMessageBox, QStackedWidget, QComboBox,
+    QDialog, QVBoxLayout as _QVL, QDialogButtonBox, QTextEdit,
+    QMenu,
 )
 from PyQt5.QtGui import QColor, QPalette, QIcon, QPainter, QPainterPath
 from pathlib import Path
@@ -29,21 +29,27 @@ from ..core import (
 from ..core.models import Task, CATEGORY_COLOUR_TAG as _CATEGORY_COLOUR_TAG_IMPORT
 from ..charts.panels import (
     StackedAreaChart, WeekdayBarChart, HourHeatmap, WeeklyCompChart,
-    CategoryBreakdownChart,
+    CategoryPieChart,
 )
 from .widgets import (
-    MetricCard, InsightStrip, ChartPanel,
+    MetricCard, InsightStrip, ChartPanel, PanelWidget,
     RangeSlider, TaskRow, PresetBar,
-    h_line, v_line, label, card_frame, make_chart_panel,
+    h_line, v_line, label, section_label, card_frame, make_chart_panel,
     EditSessionDialog, AddSessionDialog,
+)
+from .dialogs import (
+    AddGoalDialog, EditGoalDialog,
+    NewTaskDialog, RenameTaskDialog, MoveTaskDialog,
+    NewCategoryDialog, RenameCategoryDialog,
 )
 from .tab_widgets import CategoryTabWidget, TaskTabWidget
 from .calendar_widget import CalendarWidget
 from .goals_tab import GoalsTab
 from .theme import (
     BG, BG2, BG3, BG4, BORDER, BORDER2,
-    TEXT, MUTED, FAINT, ACCENT, SUCCESS, WARNING, DANGER,
-    PAD_XS, PAD_SM, PAD_MD, PAD_LG,
+    TEXT, DIM, MUTED, FAINT, ACCENT, SUCCESS, WARNING, DANGER,
+    FONT_UI, FONT_MONO, RADIUS, RADIUS_LG, PAD, PAD_MD, PAD_LG,
+    SS,
 )
 
 
@@ -95,262 +101,10 @@ class UpdateChecker(QObject):
 
 
 # ──────────────────────────────────────────────────────────
-# Goal dialogs  (add / edit a single goal)
-# ──────────────────────────────────────────────────────────
-
-_SPIN_CSS = (
-    f"QDoubleSpinBox {{ background: {BG3}; color: {TEXT};"
-    f" border: 1px solid {BORDER}; border-radius: 5px;"
-    f" padding: 4px 10px; font-size: 11px; }}"
-    f" QDoubleSpinBox:focus {{ border-color: {ACCENT}; }}"
-)
-_DATE_CSS = (
-    f"QDateEdit {{ background: {BG3}; color: {TEXT};"
-    f" border: 1px solid {BORDER}; border-radius: 5px;"
-    f" padding: 4px 10px; font-size: 11px; }}"
-    f" QDateEdit:focus {{ border-color: {ACCENT}; }}"
-)
 
 
-def _make_goal_form(root: QVBoxLayout, task_name: str,
-                    task_colour: str, task_total_hours: float,
-                    gs: GoalSpec) -> tuple[QDoubleSpinBox, QDateEdit, QLabel, QLabel]:
-    """Shared form body for add/edit goal dialogs. Returns (spin, date_edit, pace_lbl, no_dl_lbl)."""
 
-    root.addWidget(label("Target hours", MUTED, size=10))
-    spin = QDoubleSpinBox()
-    spin.setRange(0.5, 9999)
-    spin.setSingleStep(0.5)
-    spin.setValue(gs.hours if gs.hours > 0 else 10.0)
-    spin.setStyleSheet(_SPIN_CSS)
-    root.addWidget(spin)
-
-    root.addWidget(label("Deadline (optional)", MUTED, size=10))
-
-    # "No deadline" checkbox + date picker
-    no_dl_row = QHBoxLayout()
-    no_dl_row.setSpacing(PAD_SM)
-    no_dl_chk = QPushButton("No deadline")
-    no_dl_chk.setCheckable(True)
-    no_dl_chk.setChecked(gs.deadline is None)
-    no_dl_chk.setFixedHeight(30)
-    no_dl_chk.setStyleSheet(
-        f"QPushButton {{ background: {BG3}; color: {MUTED}; border: 1px solid {BORDER};"
-        f" border-radius: 5px; font-size: 10px; padding: 0 10px; }}"
-        f" QPushButton:checked {{ background: {ACCENT}; color: #fff; border-color: {ACCENT}; }}"
-    )
-    no_dl_row.addWidget(no_dl_chk)
-    de = QDateEdit()
-    de.setCalendarPopup(True)
-    de.setDisplayFormat("dd MMM yyyy")
-    de.setStyleSheet(_DATE_CSS)
-    de.setEnabled(gs.deadline is not None)
-    if gs.deadline:
-        de.setDate(QDate(gs.deadline.year, gs.deadline.month, gs.deadline.day))
-    else:
-        de.setDate(QDate.currentDate().addMonths(1))
-    no_dl_row.addWidget(de, stretch=1)
-    root.addLayout(no_dl_row)
-
-    no_dl_chk.toggled.connect(lambda checked: de.setEnabled(not checked))
-
-    # Live pace label
-    pace_lbl = QLabel("—")
-    pace_lbl.setStyleSheet(f"color: {MUTED}; font-size: 11px; background: transparent;")
-    root.addWidget(pace_lbl)
-
-    def _update_pace():
-        h        = spin.value()
-        done     = task_total_hours
-        if no_dl_chk.isChecked():
-            if done >= h:
-                pace_lbl.setText("Goal already reached!")
-                pace_lbl.setStyleSheet(f"color: {SUCCESS}; font-size: 11px; background: transparent;")
-            else:
-                pace_lbl.setText(f"{h - done:.1f}h remaining · no deadline")
-                pace_lbl.setStyleSheet(f"color: {MUTED}; font-size: 11px; background: transparent;")
-            return
-        qd        = de.date()
-        dl        = date(qd.year(), qd.month(), qd.day())
-        days_left = (dl - date.today()).days
-        if done >= h:
-            pace_lbl.setText("Goal already reached!")
-            pace_lbl.setStyleSheet(f"color: {SUCCESS}; font-size: 11px; background: transparent;")
-        elif days_left <= 0:
-            pace_lbl.setText("Deadline has passed!")
-            pace_lbl.setStyleSheet(f"color: {DANGER}; font-size: 11px; background: transparent;")
-        else:
-            req = (h - done) / days_left
-            col = SUCCESS if req <= 2 else (WARNING if req <= 4 else DANGER)
-            pace_lbl.setText(f"{req:.2f} h/day needed · {days_left}d left")
-            pace_lbl.setStyleSheet(f"color: {col}; font-size: 11px; background: transparent;")
-
-    spin.valueChanged.connect(lambda _: _update_pace())
-    de.dateChanged.connect(lambda _: _update_pace())
-    no_dl_chk.toggled.connect(lambda _: _update_pace())
-    _update_pace()
-
-    return spin, de, pace_lbl, no_dl_chk
-
-
-class AddGoalDialog(QDialog):
-    """Pick a task and set hours + optional deadline."""
-
-    def __init__(self, tasks: list[Task], goals: dict[str, GoalSpec], parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("New Goal")
-        self.setFixedWidth(380)
-        self.setStyleSheet(
-            f"background: {BG}; color: {TEXT};"
-            f" QLabel {{ background: transparent; }}"
-        )
-        self._tasks = tasks
-        self._spin: Optional[QDoubleSpinBox] = None
-        self._de:   Optional[QDateEdit]      = None
-        self._no_dl: Optional[QPushButton]   = None
-
-        root = QVBoxLayout(self)
-        root.setSpacing(PAD_SM)
-
-        root.addWidget(label("Task", MUTED, size=10))
-        self._task_combo = QComboBox()
-        self._task_combo.setStyleSheet(_COMBO_CSS)
-        for t in tasks:
-            self._task_combo.addItem(f"● {t.name}", userData=t.name)
-            idx = self._task_combo.count() - 1
-            self._task_combo.setItemData(idx, QColor(t.colour), Qt.ForegroundRole)
-        root.addWidget(self._task_combo)
-
-        root.addWidget(h_line())
-
-        self._form_slot = QVBoxLayout()
-        self._form_slot.setContentsMargins(0, 0, 0, 0)
-        self._form_slot.setSpacing(0)
-        self._form_container: Optional[QWidget] = None
-        root.addLayout(self._form_slot)
-
-        root.addStretch()
-
-        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        btns.setStyleSheet(f"color: {TEXT};")
-        btns.accepted.connect(self._on_accept)
-        btns.rejected.connect(self.reject)
-        root.addWidget(btns)
-
-        self._goals = goals
-        self._task_combo.currentIndexChanged.connect(self._rebuild_form)
-        self._rebuild_form()
-
-    def _rebuild_form(self) -> None:
-        # Destroy the old container entirely — avoids layout-item leak
-        if self._form_container is not None:
-            self._form_slot.removeWidget(self._form_container)
-            self._form_container.deleteLater()
-            self._form_container = None
-            self._spin = self._de = self._no_dl = None
-
-        task_name = self._task_combo.currentData()
-        t = next((x for x in self._tasks if x.name == task_name), None)
-        if not t:
-            return
-
-        self._form_container = QWidget()
-        self._form_container.setStyleSheet("background: transparent;")
-        form_lay = QVBoxLayout(self._form_container)
-        form_lay.setContentsMargins(0, 0, 0, 0)
-        form_lay.setSpacing(PAD_SM)
-        self._form_slot.addWidget(self._form_container)
-
-        gs = self._goals.get(t.name, GoalSpec())
-        self._spin, self._de, _, self._no_dl = _make_goal_form(
-            form_lay, t.name, t.colour, t.total_hours, gs
-        )
-
-    def _on_accept(self) -> None:
-        if self._spin is None:
-            return
-        self.accept()
-
-    def values(self) -> tuple[str, GoalSpec]:
-        task_name = self._task_combo.currentData()
-        if self._no_dl.isChecked():
-            dl = None
-        else:
-            qd = self._de.date()
-            dl = date(qd.year(), qd.month(), qd.day())
-        return task_name, GoalSpec(hours=self._spin.value(), deadline=dl)
-
-
-class EditGoalDialog(QDialog):
-    """Edit hours + deadline for a specific task goal."""
-
-    def __init__(self, task: Task, gs: GoalSpec, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle(f"Edit Goal — {task.name}")
-        self.setFixedWidth(380)
-        self.setStyleSheet(
-            f"background: {BG}; color: {TEXT};"
-            f" QLabel {{ background: transparent; }}"
-        )
-
-        root = QVBoxLayout(self)
-        root.setSpacing(PAD_SM)
-
-        self._spin, self._de, _, self._no_dl = _make_goal_form(
-            root, task.name, task.colour, task.total_hours, gs
-        )
-
-        root.addStretch()
-
-        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        btns.setStyleSheet(f"color: {TEXT};")
-        btns.accepted.connect(self.accept)
-        btns.rejected.connect(self.reject)
-        root.addWidget(btns)
-
-    def values(self) -> GoalSpec:
-        if self._no_dl.isChecked():
-            dl = None
-        else:
-            qd = self._de.date()
-            dl = date(qd.year(), qd.month(), qd.day())
-        return GoalSpec(hours=self._spin.value(), deadline=dl)
-
-
-# ──────────────────────────────────────────────────────────
-# New task dialog
-# ──────────────────────────────────────────────────────────
-
-# Middle shade for each TAG_PALETTES entry, used as swatch colour.
-_PALETTE_SWATCHES: dict[str, str] = {
-    "blue":   "#185FA5",
-    "red":    "#DC3912",
-    "yellow": "#FF9900",
-    "green":  "#639922",
-    "purple": "#7F77DD",
-    "brown":  "#8B6C42",
-    "white":  "#AAAAAA",
-    "black":  "#444444",
-}
-
-_COMBO_CSS = (
-    f"QComboBox {{ background: {BG3}; color: {TEXT};"
-    f" border: 1px solid {BORDER}; border-radius: 5px;"
-    f" padding: 4px 10px; font-size: 11px; }}"
-    f" QComboBox::drop-down {{ border: none; }}"
-    f" QComboBox QAbstractItemView {{ background: {BG2};"
-    f" color: {TEXT}; selection-background-color: {ACCENT}; }}"
-)
-
-_INPUT_CSS = (
-    f"QLineEdit {{ background: {BG3}; color: {TEXT};"
-    f" border: 1px solid {BORDER}; border-radius: 5px;"
-    f" padding: 4px 10px; font-size: 11px; }}"
-    f" QLineEdit:focus {{ border-color: {ACCENT}; }}"
-)
-
-
-def _goal_is_archived(gs: GoalSpec, today: date) -> bool:
+def _goal_is_archived(gs, today) -> bool:
     """A goal is archived if manually archived OR completed 3+ days ago."""
     if gs.archived:
         return True
@@ -366,235 +120,6 @@ def _swatch_for_tag(colour_tag: str) -> str:
     return palette[1] if len(palette) > 1 else palette[0]
 
 
-class NewCategoryDialog(QDialog):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("New Category")
-        self.setFixedWidth(340)
-        self.setStyleSheet(
-            f"background: {BG}; color: {TEXT};"
-            f" QLabel {{ background: transparent; }}"
-        )
-
-        root = QVBoxLayout(self)
-        root.setSpacing(PAD_SM)
-
-        root.addWidget(label("Category name", MUTED, size=10))
-        self._name = QLineEdit()
-        self._name.setPlaceholderText("e.g. Side Projects")
-        self._name.setStyleSheet(_INPUT_CSS)
-        root.addWidget(self._name)
-
-        root.addWidget(label("Colour", MUTED, size=10))
-        self._colour = QComboBox()
-        self._colour.setStyleSheet(_COMBO_CSS)
-        for tag in _PALETTE_SWATCHES:
-            self._colour.addItem(f"● {tag}", userData=tag)
-            idx = self._colour.count() - 1
-            self._colour.setItemData(idx, QColor(_PALETTE_SWATCHES[tag]),
-                                     Qt.ForegroundRole)
-        root.addStretch()
-
-        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        btns.setStyleSheet(f"color: {TEXT};")
-        btns.accepted.connect(self._on_accept)
-        btns.rejected.connect(self.reject)
-        root.addWidget(btns)
-
-    def _on_accept(self) -> None:
-        name = self._name.text().strip()
-        if not name:
-            self._name.setStyleSheet(
-                _INPUT_CSS + f" QLineEdit {{ border-color: {DANGER}; }}"
-            )
-            return
-        # Enforce capital first letter
-        if name[0].islower():
-            name = name[0].upper() + name[1:]
-            self._name.setText(name)
-        self.accept()
-
-    def values(self) -> tuple[str, str]:
-        """Returns (category_name, colour_tag)."""
-        return self._name.text().strip(), self._colour.currentData()
-
-
-class RenameCategoryDialog(QDialog):
-    def __init__(self, categories: list[tuple[str, str]], parent=None):
-        """categories: list of (name, colour_tag) from the DB."""
-        super().__init__(parent)
-        self.setWindowTitle("Rename Category")
-        self.setFixedWidth(340)
-        self.setStyleSheet(
-            f"background: {BG}; color: {TEXT};"
-            f" QLabel {{ background: transparent; }}"
-        )
-
-        root = QVBoxLayout(self)
-        root.setSpacing(PAD_SM)
-
-        root.addWidget(label("Category to rename", MUTED, size=10))
-        self._category = QComboBox()
-        self._category.setStyleSheet(_COMBO_CSS)
-        for cat_name, colour_tag in categories:
-            swatch = _swatch_for_tag(colour_tag)
-            self._category.addItem(f"● {cat_name}", userData=cat_name)
-            idx = self._category.count() - 1
-            self._category.setItemData(idx, QColor(swatch), Qt.ForegroundRole)
-        root.addWidget(self._category)
-
-        root.addWidget(label("New name", MUTED, size=10))
-        self._name = QLineEdit()
-        self._name.setStyleSheet(_INPUT_CSS)
-        self._name.setPlaceholderText("New category name")
-        root.addWidget(self._name)
-        root.addStretch()
-
-        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        btns.setStyleSheet(f"color: {TEXT};")
-        btns.accepted.connect(self._on_accept)
-        btns.rejected.connect(self.reject)
-        root.addWidget(btns)
-
-    def _on_accept(self) -> None:
-        name = self._name.text().strip()
-        if not name:
-            self._name.setStyleSheet(
-                _INPUT_CSS + f" QLineEdit {{ border-color: {DANGER}; }}"
-            )
-            return
-        if name[0].islower():
-            name = name[0].upper() + name[1:]
-            self._name.setText(name)
-        self.accept()
-
-    def values(self) -> tuple[str, str]:
-        """Returns (old_category_name, new_category_name)."""
-        return self._category.currentData(), self._name.text().strip()
-
-
-class NewTaskDialog(QDialog):
-    def __init__(self, categories: list[tuple[str, str]], parent=None):
-        """categories: list of (name, colour_tag) from the DB."""
-        super().__init__(parent)
-        self.setWindowTitle("New Task")
-        self.setFixedWidth(380)
-        self.setStyleSheet(
-            f"background: {BG}; color: {TEXT};"
-            f" QLabel {{ background: transparent; }}"
-        )
-
-        root = QVBoxLayout(self)
-        root.setSpacing(PAD_SM)
-
-        root.addWidget(label("Task name", MUTED, size=10))
-        self._name = QLineEdit()
-        self._name.setPlaceholderText("e.g. Deep work")
-        self._name.setStyleSheet(_INPUT_CSS)
-        root.addWidget(self._name)
-
-        root.addWidget(label("Category", MUTED, size=10))
-        self._category = QComboBox()
-        self._category.setStyleSheet(_COMBO_CSS)
-        for cat_name, colour_tag in categories:
-            swatch = _swatch_for_tag(colour_tag)
-            self._category.addItem(f"● {cat_name}", userData=cat_name)
-            idx = self._category.count() - 1
-            self._category.setItemData(idx, QColor(swatch), Qt.ForegroundRole)
-        root.addWidget(self._category)
-
-        root.addStretch()
-
-        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        btns.setStyleSheet(f"color: {TEXT};")
-        btns.accepted.connect(self._on_accept)
-        btns.rejected.connect(self.reject)
-        root.addWidget(btns)
-
-    def _on_accept(self) -> None:
-        if not self._name.text().strip():
-            self._name.setStyleSheet(
-                _INPUT_CSS + f" QLineEdit {{ border-color: {DANGER}; }}"
-            )
-            return
-        self.accept()
-
-    def values(self) -> tuple[str, str]:
-        """Returns (task_name, category_name)."""
-        return self._name.text().strip(), self._category.currentData()
-
-
-# ──────────────────────────────────────────────────────────
-# Rename / Move task dialogs
-# ──────────────────────────────────────────────────────────
-
-class RenameTaskDialog(QDialog):
-    def __init__(self, current_name: str, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Rename Task")
-        self.setFixedWidth(340)
-        self.setStyleSheet(
-            f"background: {BG}; color: {TEXT};"
-            f" QLabel {{ background: transparent; }}"
-        )
-        root = QVBoxLayout(self)
-        root.setSpacing(PAD_SM)
-        root.addWidget(label("New name", MUTED, size=10))
-        self._name = QLineEdit(current_name)
-        self._name.setStyleSheet(_INPUT_CSS)
-        self._name.selectAll()
-        root.addWidget(self._name)
-        root.addStretch()
-        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        btns.setStyleSheet(f"color: {TEXT};")
-        btns.accepted.connect(self._on_accept)
-        btns.rejected.connect(self.reject)
-        root.addWidget(btns)
-
-    def _on_accept(self) -> None:
-        if not self._name.text().strip():
-            self._name.setStyleSheet(
-                _INPUT_CSS + f" QLineEdit {{ border-color: {DANGER}; }}")
-            return
-        self.accept()
-
-    def value(self) -> str:
-        return self._name.text().strip()
-
-
-class MoveTaskDialog(QDialog):
-    def __init__(self, categories: list[tuple[str, str]], parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Move to Category")
-        self.setFixedWidth(340)
-        self.setStyleSheet(
-            f"background: {BG}; color: {TEXT};"
-            f" QLabel {{ background: transparent; }}"
-        )
-        root = QVBoxLayout(self)
-        root.setSpacing(PAD_SM)
-        root.addWidget(label("Select category", MUTED, size=10))
-        self._category = QComboBox()
-        self._category.setStyleSheet(_COMBO_CSS)
-        for cat_name, colour_tag in categories:
-            swatch = _swatch_for_tag(colour_tag)
-            self._category.addItem(f"● {cat_name}", userData=cat_name)
-            idx = self._category.count() - 1
-            from PyQt5.QtCore import Qt as _Qt
-            self._category.setItemData(idx, QColor(swatch), _Qt.ForegroundRole)
-        root.addWidget(self._category)
-        root.addStretch()
-        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        btns.setStyleSheet(f"color: {TEXT};")
-        btns.accepted.connect(self.accept)
-        btns.rejected.connect(self.reject)
-        root.addWidget(btns)
-
-    def value(self) -> str:
-        return self._category.currentData()
-
-
-# ──────────────────────────────────────────────────────────
 # Main window
 # ──────────────────────────────────────────────────────────
 
@@ -626,11 +151,14 @@ class MainWindow(QMainWindow):
         self._result:      Optional[ParseResult]          = None
         self._goals:       dict[str, GoalSpec]            = {}
         self._categories:  list[tuple[str, str]]          = []
-        self._task_rows:   dict[str, TaskRow]             = {}
-        self._category_tabs: dict[str, CategoryTabWidget] = {}
-        self._task_tabs:     dict[str, TaskTabWidget]     = {}
+        self._category_views: dict[str, CategoryTabWidget] = {}
+        self._task_views:     dict[str, TaskTabWidget]     = {}
         self._cal_tab:       Optional[CalendarWidget]     = None
         self._goals_tab:     Optional[GoalsTab]           = None
+        self._current_view:  str                          = "overview"
+        self._clocked_task:  Optional[str]               = None
+        self._collapsed_cats: set[str]                   = set()
+        self._sidebar_cat_items: dict[str, list]         = {}  # cat → [task widgets]
 
         self._date_low  = 0
         self._date_high = 0
@@ -691,41 +219,37 @@ class MainWindow(QMainWindow):
 
     def _build_top_bar(self, root: QVBoxLayout) -> None:
         bar = QFrame()
-        bar.setFixedHeight(46)
+        bar.setFixedHeight(40)
         bar.setStyleSheet(
             f"QFrame {{ background: {BG2}; border-bottom: 1px solid {BORDER}; }}"
         )
         lay = QHBoxLayout(bar)
-        lay.setContentsMargins(PAD_LG, 0, PAD_LG, 0)
-        lay.setSpacing(10)
+        lay.setContentsMargins(PAD_MD, 0, PAD_MD, 0)
+        lay.setSpacing(PAD)
 
         logo = QLabel("Time Tracker")
         logo.setStyleSheet(
-            f"color: {TEXT}; font-size: 13px; font-weight: 700;"
-            f" letter-spacing: 0.5px; background: transparent; border: none;"
+            f"color: {TEXT}; font-size: 12px; font-weight: 600;"
+            f" font-family: {FONT_UI}; letter-spacing: 0.3px;"
+            f" background: transparent; border: none;"
         )
         lay.addWidget(logo)
         lay.addStretch()
 
-        self._update_btn = QPushButton("⬆ Update available")
+        self._update_btn = QPushButton("Update available")
         self._update_btn.setVisible(False)
-        self._update_btn.setStyleSheet(
-            f"QPushButton {{ background: {SUCCESS}; color: #fff;"
-            f" border: none; border-radius: 5px; padding: 4px 10px;"
-            f" font-size: 11px; font-weight: 600; }}"
-            f"QPushButton:hover {{ background: #2ea85a; }}"
-        )
+        self._update_btn.setStyleSheet(SS.button("primary"))
         self._update_btn.clicked.connect(self._open_releases)
         lay.addWidget(self._update_btn)
 
-        for txt, slot in [("Reload",   self._trigger_reload),
-                          ("☀ Light", self._on_toggle_theme)]:
+        for txt, slot in [("Reload", self._trigger_reload),
+                          ("Light",  self._on_toggle_theme)]:
             btn = self._mk_btn(txt, slot)
-            if txt.startswith("☀"):
+            if txt == "Light":
                 self._theme_btn = btn
             lay.addWidget(btn)
 
-        self._updated_lbl = label("Loading…", FAINT, size=9)
+        self._updated_lbl = label("Loading…", FAINT, size=9, mono=True)
         lay.addWidget(self._updated_lbl)
 
         root.addWidget(bar)
@@ -743,152 +267,432 @@ class MainWindow(QMainWindow):
         splitter.setHandleWidth(4)
         splitter.setStyleSheet(_h_css)
 
-        # ── Left panel (fixed 340 px) ─────────────────────
+        # ── Left panel ────────────────────────────────────
         left = QWidget()
-        left.setMinimumWidth(280)
-        left.setMaximumWidth(560)
-        left.setStyleSheet(f"background: {BG};")
+        left.setMinimumWidth(260)
+        left.setMaximumWidth(460)
+        left.setStyleSheet(f"background: {BG2};")
         ll = QVBoxLayout(left)
-        ll.setContentsMargins(PAD_MD, PAD_MD, PAD_SM, PAD_MD)
-        ll.setSpacing(PAD_SM)
+        ll.setContentsMargins(0, 0, 0, 0)
+        ll.setSpacing(0)
 
-        # Date range card
-        rc = card_frame()
-        rl = QVBoxLayout(rc)
-        rl.setContentsMargins(PAD_SM, PAD_SM, PAD_SM, PAD_SM)
-        rl.setSpacing(5)
+        self._build_session_bar(ll)
+        self._build_nav_section(ll)
+        self._build_date_range(ll)
+        self._build_task_list(ll)
+
+        splitter.addWidget(left)
+
+        # ── Right panel: stacked widget ───────────────────
+        self._stack = QStackedWidget()
+        self._stack.setStyleSheet(f"background: {BG};")
+
+        self._view_overview = self._build_overview_tab()
+        self._stack.addWidget(self._view_overview)       # index 0
+
+        self._cal_tab = CalendarWidget(store=self._store)
+        self._cal_tab.reload_needed.connect(self._trigger_reload)
+        self._stack.addWidget(self._cal_tab)             # index 1
+
+        self._goals_tab = GoalsTab()
+        self._goals_tab.open_goal_dialog.connect(self._on_edit_goals)
+        self._goals_tab.task_clicked.connect(self._open_task_view)
+        self._goals_tab.edit_goal.connect(self._on_edit_single_goal)
+        self._goals_tab.cancel_goal.connect(self._on_cancel_goal)
+        self._goals_tab.archive_goal.connect(self._on_archive_goal)
+        self._stack.addWidget(self._goals_tab)           # index 2
+
+        self._stack_base = {"overview": 0, "calendar": 1, "goals": 2}
+        self._stack.setCurrentIndex(0)
+
+        splitter.addWidget(self._stack)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        self._splitter = splitter
+        QTimer.singleShot(0, lambda: self._splitter.setSizes([340, self._splitter.width() - 340]))
+        root.addWidget(splitter, stretch=1)
+
+    # ── Session bar ──────────────────────────────────────
+
+    def _build_session_bar(self, ll: QVBoxLayout) -> None:
+        bar = QFrame()
+        bar.setObjectName("SessionBar")
+        bar.setStyleSheet(
+            f"QFrame#SessionBar {{ background: {BG2}; border-bottom: 1px solid {BORDER}; }}"
+        )
+        bl = QVBoxLayout(bar)
+        bl.setContentsMargins(PAD_MD, PAD, PAD_MD, PAD)
+        bl.setSpacing(4)
+
+        top_row = QHBoxLayout()
+        self._session_status_lbl = QLabel("○ IDLE")
+        self._session_status_lbl.setStyleSheet(
+            f"color: {MUTED}; font-size: 9px; font-family: {FONT_MONO};"
+            f" letter-spacing: 1.1px; background: transparent; border: none;"
+        )
+        top_row.addWidget(self._session_status_lbl)
+        top_row.addStretch()
+        self._session_dot = QLabel("●")
+        self._session_dot.setStyleSheet(
+            f"color: {MUTED}; font-size: 7px; background: transparent; border: none;"
+        )
+        top_row.addWidget(self._session_dot)
+        bl.addLayout(top_row)
+
+        mid_row = QHBoxLayout()
+        self._session_task_lbl = QLabel("—")
+        self._session_task_lbl.setStyleSheet(
+            f"color: {TEXT}; font-size: 13px; font-weight: 600;"
+            f" background: transparent; border: none;"
+        )
+        mid_row.addWidget(self._session_task_lbl, stretch=1)
+        self._session_time_lbl = QLabel("00:00:00")
+        self._session_time_lbl.setStyleSheet(
+            f"color: {MUTED}; font-size: 16px; font-family: {FONT_MONO};"
+            f" font-weight: 600; font-variant-numeric: tabular-nums;"
+            f" background: transparent; border: none;"
+        )
+        mid_row.addWidget(self._session_time_lbl)
+        bl.addLayout(mid_row)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(4)
+
+        self._session_combo = QComboBox()
+        self._session_combo.setStyleSheet(SS.combo())
+        self._session_combo.setFixedHeight(26)
+        btn_row.addWidget(self._session_combo, stretch=1)
+
+        self._session_clockin_btn = QPushButton("▶ CLOCK IN")
+        self._session_clockin_btn.setFixedHeight(26)
+        self._session_clockin_btn.setStyleSheet(SS.button("primary"))
+        self._session_clockin_btn.clicked.connect(self._on_session_bar_clockin)
+        btn_row.addWidget(self._session_clockin_btn)
+
+        self._session_stop_btn = QPushButton("■ STOP")
+        self._session_stop_btn.setFixedHeight(26)
+        self._session_stop_btn.setStyleSheet(SS.button("danger"))
+        self._session_stop_btn.clicked.connect(self._on_session_bar_stop)
+        btn_row.addWidget(self._session_stop_btn)
+        bl.addLayout(btn_row)
+
+        ll.addWidget(bar)
+        self._session_bar = bar
+
+    def _update_session_bar(self) -> None:
+        """Sync session bar state with the current clock state."""
+        if not self._result:
+            return
+        clocked = next((t for t in self._result.tasks if t.is_clocked_in), None)
+        self._clocked_task = clocked.name if clocked else None
+
+        if clocked:
+            self._session_status_lbl.setText("◉ CLOCKED IN")
+            self._session_status_lbl.setStyleSheet(
+                f"color: {SUCCESS}; font-size: 9px; font-family: {FONT_MONO};"
+                f" letter-spacing: 1.1px; background: transparent; border: none;"
+            )
+            self._session_dot.setStyleSheet(
+                f"color: {SUCCESS}; font-size: 7px; background: transparent; border: none;"
+            )
+            self._session_task_lbl.setText(clocked.name)
+            self._session_task_lbl.setStyleSheet(
+                f"color: {TEXT}; font-size: 13px; font-weight: 600;"
+                f" background: transparent; border: none;"
+            )
+            elapsed = clocked.open_session.duration.total_seconds()
+            self._update_session_bar_time(elapsed)
+            self._session_combo.setVisible(False)
+            self._session_clockin_btn.setVisible(False)
+            self._session_stop_btn.setVisible(True)
+        else:
+            self._session_status_lbl.setText("○ IDLE")
+            self._session_status_lbl.setStyleSheet(
+                f"color: {MUTED}; font-size: 9px; font-family: {FONT_MONO};"
+                f" letter-spacing: 1.1px; background: transparent; border: none;"
+            )
+            self._session_dot.setStyleSheet(
+                f"color: {MUTED}; font-size: 7px; background: transparent; border: none;"
+            )
+            self._session_task_lbl.setText("—")
+            self._session_task_lbl.setStyleSheet(
+                f"color: {MUTED}; font-size: 13px; font-weight: 600;"
+                f" background: transparent; border: none;"
+            )
+            self._session_time_lbl.setText("00:00:00")
+            self._session_time_lbl.setStyleSheet(
+                f"color: {MUTED}; font-size: 16px; font-family: {FONT_MONO};"
+                f" font-weight: 600; background: transparent; border: none;"
+            )
+            self._session_combo.setVisible(True)
+            self._session_clockin_btn.setVisible(True)
+            self._session_stop_btn.setVisible(False)
+
+        # Repopulate combo with current tasks
+        self._session_combo.blockSignals(True)
+        prev = self._session_combo.currentText()
+        self._session_combo.clear()
+        if self._result:
+            for t in sorted(self._result.tasks, key=lambda x: x.name):
+                if not t.archived:
+                    self._session_combo.addItem(t.name)
+            idx = self._session_combo.findText(prev)
+            if idx >= 0:
+                self._session_combo.setCurrentIndex(idx)
+        self._session_combo.blockSignals(False)
+
+    def _update_session_bar_time(self, elapsed_sec: float) -> None:
+        h = int(elapsed_sec // 3600)
+        m = int((elapsed_sec % 3600) // 60)
+        s = int(elapsed_sec % 60)
+        self._session_time_lbl.setText(f"{h:02d}:{m:02d}:{s:02d}")
+        self._session_time_lbl.setStyleSheet(
+            f"color: {ACCENT}; font-size: 16px; font-family: {FONT_MONO};"
+            f" font-weight: 600; background: transparent; border: none;"
+        )
+
+    def _on_session_bar_clockin(self) -> None:
+        task_name = self._session_combo.currentText()
+        if task_name:
+            self._on_clock_in(task_name)
+
+    def _on_session_bar_stop(self) -> None:
+        if self._clocked_task:
+            self._on_clock_out(self._clocked_task)
+
+    # ── Nav section ──────────────────────────────────────
+
+    def _build_nav_section(self, ll: QVBoxLayout) -> None:
+        nav = QFrame()
+        nav.setStyleSheet(
+            f"QFrame {{ background: {BG2}; border-bottom: 1px solid {BORDER}; }}"
+        )
+        nl = QVBoxLayout(nav)
+        nl.setContentsMargins(6, 6, 6, 6)
+        nl.setSpacing(2)
+
+        self._nav_items: dict[str, QWidget] = {}
+        goals_count = len([t for t in (self._goals or {}).keys()])
+        for view_id, lbl_text, sym, badge in [
+            ("overview", "Overview", "▦", None),
+            ("calendar", "Calendar", "◫", None),
+            ("goals",    "Goals",    "◎", str(goals_count) if goals_count else None),
+        ]:
+            item = self._make_nav_item(view_id, lbl_text, sym, badge)
+            nl.addWidget(item)
+            self._nav_items[view_id] = item
+
+        ll.addWidget(nav)
+        self._update_nav_highlight()
+
+    def _make_nav_item(self, view_id: str, lbl_text: str, sym: str,
+                       badge: str | None) -> QWidget:
+        item = QWidget()
+        item.setCursor(Qt.PointingHandCursor)
+        item.setObjectName(f"NavItem")
+        il = QHBoxLayout(item)
+        il.setContentsMargins(10, 5, 10, 5)
+        il.setSpacing(8)
+
+        sym_lbl = QLabel(sym)
+        sym_lbl.setStyleSheet(
+            f"color: {MUTED}; font-size: 10px; background: transparent; border: none;"
+        )
+        sym_lbl.setFixedWidth(14)
+        il.addWidget(sym_lbl)
+
+        name_lbl = QLabel(lbl_text)
+        name_lbl.setStyleSheet(
+            f"color: {DIM}; font-size: 11px; font-family: {FONT_MONO};"
+            f" letter-spacing: 0.3px; background: transparent; border: none;"
+        )
+        il.addWidget(name_lbl, stretch=1)
+
+        if badge:
+            badge_lbl = QLabel(badge)
+            badge_lbl.setStyleSheet(
+                f"color: {MUTED}; font-size: 10px; font-family: {FONT_MONO};"
+                f" background: transparent; border: none;"
+            )
+            il.addWidget(badge_lbl)
+
+        item.mousePressEvent = lambda e, vid=view_id: self._select_view(vid)
+        return item
+
+    def _update_nav_highlight(self) -> None:
+        for view_id, item in self._nav_items.items():
+            active = (view_id == self._current_view)
+            item.setStyleSheet(
+                f"QWidget {{ background: {BG3 if active else 'transparent'};"
+                f" border-left: 2px solid {ACCENT if active else 'transparent'};"
+                f" border-radius: {RADIUS}px; }}"
+            )
+            # Re-color child labels
+            for child in item.findChildren(QLabel):
+                if child.text() in ("▦", "◫", "◎"):
+                    child.setStyleSheet(
+                        f"color: {ACCENT if active else MUTED}; font-size: 10px;"
+                        f" background: transparent; border: none;"
+                    )
+                else:
+                    child.setStyleSheet(
+                        f"color: {TEXT if active else DIM}; font-size: 11px;"
+                        f" font-family: {FONT_MONO}; letter-spacing: 0.3px;"
+                        f" background: transparent; border: none;"
+                    )
+
+    def _select_view(self, key: str) -> None:
+        """Switch the right panel to the given view."""
+        self._current_view = key
+        self._update_nav_highlight()
+
+        if key in self._stack_base:
+            self._stack.setCurrentIndex(self._stack_base[key])
+            return
+
+        if key.startswith("cat:"):
+            cat_name = key[4:]
+            if cat_name not in self._category_views:
+                tab = CategoryTabWidget(cat_name, parent=self)
+                self._stack.addWidget(tab)
+                self._category_views[cat_name] = tab
+                # Refresh immediately with current range
+                if self._result and self._all_dates:
+                    tab.refresh(
+                        self._all_dates[self._date_low],
+                        self._all_dates[self._date_high],
+                        self._result.tasks, self._goals,
+                    )
+            self._stack.setCurrentWidget(self._category_views[cat_name])
+            return
+
+        if key.startswith("task:"):
+            task_name = key[5:]
+            self._open_task_view(task_name)
+
+    # ── Date range ───────────────────────────────────────
+
+    def _build_date_range(self, ll: QVBoxLayout) -> None:
+        range_sec = QFrame()
+        range_sec.setStyleSheet(
+            f"QFrame {{ background: {BG2}; border-bottom: 1px solid {BORDER}; }}"
+        )
+        rl = QVBoxLayout(range_sec)
+        rl.setContentsMargins(PAD_MD, PAD, PAD_MD, PAD)
+        rl.setSpacing(PAD)
         self._preset_bar = PresetBar()
         self._preset_bar.preset_selected.connect(self._on_preset)
         rl.addWidget(self._preset_bar)
         self._range_slider = RangeSlider()
         self._range_slider.range_changed.connect(self._on_range_changed)
         rl.addWidget(self._range_slider)
-        self._range_lbl = label("", MUTED, size=9)
+        self._range_lbl = label("", MUTED, size=9, mono=True)
         self._range_lbl.setAlignment(Qt.AlignCenter)
         rl.addWidget(self._range_lbl)
-        ll.addWidget(rc)
+        ll.addWidget(range_sec)
 
-        # Task list header: label + "Archived" toggle + "+ Category" button
-        tasks_hdr = QHBoxLayout()
-        tasks_hdr.setContentsMargins(0, 0, 0, 0)
-        tasks_hdr.addWidget(label("Tasks", TEXT, bold=True, size=11))
+    # ── Task list ────────────────────────────────────────
+
+    def _build_task_list(self, ll: QVBoxLayout) -> None:
+        tasks_hdr_frame = QFrame()
+        tasks_hdr_frame.setStyleSheet(
+            f"QFrame {{ background: {BG2}; border-bottom: 1px solid {BORDER}; }}"
+        )
+        tasks_hdr = QHBoxLayout(tasks_hdr_frame)
+        tasks_hdr.setContentsMargins(PAD_MD, PAD, PAD_MD, PAD)
+        tasks_hdr.setSpacing(PAD)
+        tasks_hdr.addWidget(section_label("Tasks"))
         tasks_hdr.addStretch()
+
         self._archived_btn = QPushButton("Archived")
-        self._archived_btn.setFixedHeight(22)
+        self._archived_btn.setFixedHeight(20)
         self._archived_btn.setCheckable(True)
         self._archived_btn.setChecked(self._show_archived)
         self._archived_btn.setStyleSheet(
             f"QPushButton {{ background: transparent; color: {MUTED};"
-            f" border: 1px solid {BORDER}; border-radius: 4px;"
-            f" font-size: 10px; padding: 0 8px; }}"
-            f" QPushButton:hover {{ color: {TEXT}; background: {BG3};"
-            f" border-color: {BORDER2}; }}"
-            f" QPushButton:checked {{ color: {TEXT}; background: {BG3};"
-            f" border-color: {BORDER2}; }}"
+            f" border: 1px solid {BORDER}; border-radius: {RADIUS}px;"
+            f" font-size: 9px; font-family: {FONT_UI}; padding: 0 7px; }}"
+            f" QPushButton:hover {{ color: {TEXT}; background: {BG3}; border-color: {BORDER2}; }}"
+            f" QPushButton:checked {{ color: {ACCENT}; border-color: {ACCENT}; }}"
         )
         self._archived_btn.toggled.connect(self._on_toggle_archived)
         tasks_hdr.addWidget(self._archived_btn)
-        add_cat_btn = QPushButton("+ Category")
-        add_cat_btn.setFixedHeight(22)
+
+        add_cat_btn = QPushButton("+ Cat")
+        add_cat_btn.setFixedHeight(20)
         add_cat_btn.setStyleSheet(
             f"QPushButton {{ background: transparent; color: {MUTED};"
-            f" border: 1px solid {BORDER}; border-radius: 4px;"
-            f" font-size: 10px; padding: 0 8px; }}"
-            f" QPushButton:hover {{ color: {TEXT}; background: {BG3};"
-            f" border-color: {BORDER2}; }}"
+            f" border: 1px solid {BORDER}; border-radius: {RADIUS}px;"
+            f" font-size: 9px; font-family: {FONT_UI}; padding: 0 7px; }}"
+            f" QPushButton:hover {{ color: {TEXT}; background: {BG3}; border-color: {BORDER2}; }}"
         )
         add_cat_btn.clicked.connect(self._on_category_menu)
         tasks_hdr.addWidget(add_cat_btn)
-        ll.addLayout(tasks_hdr)
+        ll.addWidget(tasks_hdr_frame)
 
         task_scroll = QScrollArea()
         task_scroll.setWidgetResizable(True)
         task_scroll.setStyleSheet(
-            f"QScrollArea {{ border: none; background: {BG}; }}"
-            f"QScrollBar:vertical {{ background: {BG2}; width: 4px; }}"
-            f"QScrollBar::handle:vertical {{ background: {BORDER}; border-radius: 2px; }}"
-            f"QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}"
+            SS.scrollarea() + f" QScrollArea {{ background: {BG2}; }}"
         )
         self._task_container = QWidget()
-        self._task_container.setStyleSheet(f"background: {BG};")
+        self._task_container.setStyleSheet(f"background: {BG2};")
         self._task_layout = QVBoxLayout(self._task_container)
-        self._task_layout.setContentsMargins(0, 0, 0, 0)
+        self._task_layout.setContentsMargins(0, 4, 0, 4)
         self._task_layout.setSpacing(0)
         self._task_layout.addStretch()
         task_scroll.setWidget(self._task_container)
         ll.addWidget(task_scroll, stretch=1)
 
-        # ── Compact top-3 goals strip ──────────────────────
-        self._goals_strip = QWidget()
+        # Goals strip (top-3 by closest deadline)
+        self._goals_strip = QFrame()
+        self._goals_strip.setObjectName("GoalsStrip")
         self._goals_strip.setStyleSheet(
-            f"background: {BG2}; border-top: 1px solid {BORDER};"
+            f"QFrame#GoalsStrip {{ background: {BG2}; border-top: 1px solid {BORDER}; }}"
         )
         self._goals_strip_layout = QVBoxLayout(self._goals_strip)
-        self._goals_strip_layout.setContentsMargins(8, 6, 8, 6)
-        self._goals_strip_layout.setSpacing(2)
+        self._goals_strip_layout.setContentsMargins(PAD_MD, PAD, PAD_MD, PAD)
+        self._goals_strip_layout.setSpacing(3)
+        self._goals_strip.setVisible(False)
         ll.addWidget(self._goals_strip)
 
-        splitter.addWidget(left)
-
-        # ── Right panel: tab widget ───────────────────────
-        self._tabs = QTabWidget()
-        self._tabs.setTabsClosable(True)
-        self._tabs.setMovable(True)
-        self._tabs.setStyleSheet(
-            f"QTabWidget::pane {{ border: none; background: {BG}; }}"
-            f"QTabWidget::tab-bar {{ left: 0px; }}"
-            f"QTabBar::tab {{ background: {BG2}; color: {MUTED};"
-            f" border: 1px solid {BORDER}; border-bottom: none;"
-            f" padding: 5px 14px; font-size: 10px;"
-            f" border-top-left-radius: 4px; border-top-right-radius: 4px; }}"
-            f"QTabBar::tab:selected {{ background: {BG3}; color: {TEXT}; }}"
-            f"QTabBar::tab:hover {{ color: {TEXT}; background: {BG3}; }}"
-            f"QTabBar::close-button {{ image: none; }}"
+        # Footer
+        footer = QFrame()
+        footer.setFixedHeight(28)
+        footer.setStyleSheet(
+            f"QFrame {{ background: {BG2}; border-top: 1px solid {BORDER}; }}"
         )
-        self._tabs.tabCloseRequested.connect(self._on_tab_close_requested)
-        self._tabs.tabBar().tabMoved.connect(self._on_tab_moved)
-        overview = self._build_overview_tab()
-        self._tabs.addTab(overview, "Overview")
-        # Prevent the Overview tab from being closable
-        self._tabs.tabBar().setTabButton(0, self._tabs.tabBar().RightSide, None)
-
-        self._cal_tab = CalendarWidget(store=self._store)
-        self._cal_tab.reload_needed.connect(self._trigger_reload)
-        self._tabs.addTab(self._cal_tab, "Calendar")
-        self._tabs.tabBar().setTabButton(1, self._tabs.tabBar().RightSide, None)
-
-        self._goals_tab = GoalsTab()
-        self._goals_tab.open_goal_dialog.connect(self._on_edit_goals)
-        self._goals_tab.task_clicked.connect(self._open_task_tab)
-        self._goals_tab.edit_goal.connect(self._on_edit_single_goal)
-        self._goals_tab.cancel_goal.connect(self._on_cancel_goal)
-        self._goals_tab.archive_goal.connect(self._on_archive_goal)
-        self._tabs.addTab(self._goals_tab, "Goals")
-        self._tabs.tabBar().setTabButton(2, self._tabs.tabBar().RightSide, None)
-
-        splitter.addWidget(self._tabs)
-        splitter.setSizes([390, 1210])
-        root.addWidget(splitter, stretch=1)
+        fl = QHBoxLayout(footer)
+        fl.setContentsMargins(PAD_MD, 0, PAD_MD, 0)
+        self._footer_lbl = QLabel("◉ DB:OK")
+        self._footer_lbl.setStyleSheet(
+            f"color: {MUTED}; font-size: 9px; font-family: {FONT_MONO};"
+            f" background: transparent; border: none; letter-spacing: 0.4px;"
+        )
+        fl.addWidget(self._footer_lbl)
+        fl.addStretch()
+        self._footer_time = QLabel("")
+        self._footer_time.setStyleSheet(
+            f"color: {MUTED}; font-size: 9px; font-family: {FONT_MONO};"
+            f" background: transparent; border: none; letter-spacing: 0.4px;"
+        )
+        fl.addWidget(self._footer_time)
+        ll.addWidget(footer)
 
     def _build_overview_tab(self) -> QWidget:
-        """Build and return the overview scroll area (former right panel)."""
+        """Build and return the overview scroll area."""
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setStyleSheet(
-            f"QScrollArea {{ border: none; background: {BG}; }}"
-            f"QScrollBar:vertical {{ background: {BG2}; width: 4px; }}"
-            f"QScrollBar::handle:vertical {{ background: {BORDER}; border-radius: 2px; }}"
-            f"QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}"
-        )
+        scroll.setStyleSheet(SS.scrollarea())
         right_inner = QWidget()
         right_inner.setStyleSheet(f"background: {BG};")
         cl = QVBoxLayout(right_inner)
-        cl.setContentsMargins(PAD_SM, PAD_MD, PAD_MD, PAD_MD)
-        cl.setSpacing(PAD_SM)
+        cl.setContentsMargins(PAD, PAD_MD, PAD_MD, PAD_MD)
+        cl.setSpacing(PAD)
 
         # Metric cards (5 across)
         mc_row = QHBoxLayout()
-        mc_row.setSpacing(PAD_SM)
+        mc_row.setSpacing(PAD)
         self._mc_today    = MetricCard("Today")
         self._mc_total    = MetricCard("Total tracked time")
         self._mc_sessions = MetricCard("Sessions")
@@ -907,7 +711,7 @@ class MainWindow(QMainWindow):
         vsplit = QSplitter(Qt.Vertical)
         vsplit.setChildrenCollapsible(False)
         vsplit.setStyleSheet(
-            f"QSplitter::handle:vertical {{ background: {BORDER}; height: 4px; margin: 1px 0; }}"
+            f"QSplitter::handle:vertical {{ background: {BORDER}; height: 3px; margin: 1px 0; }}"
             f"QSplitter::handle:vertical:hover {{ background: {ACCENT}; }}"
         )
 
@@ -918,7 +722,7 @@ class MainWindow(QMainWindow):
         row2_w.setStyleSheet(f"background: {BG};")
         row2 = QHBoxLayout(row2_w)
         row2.setContentsMargins(0, 0, 0, 0)
-        row2.setSpacing(PAD_SM)
+        row2.setSpacing(PAD)
         self._wd_chart = WeekdayBarChart()
         row2.addWidget(make_chart_panel("Avg by weekday", self._wd_chart))
         self._wc_chart = WeeklyCompChart()
@@ -928,7 +732,7 @@ class MainWindow(QMainWindow):
         self._hm_chart = HourHeatmap()
         vsplit.addWidget(make_chart_panel("Hour-of-day heatmap", self._hm_chart))
 
-        self._cat_breakdown = CategoryBreakdownChart()
+        self._cat_breakdown = CategoryPieChart()
         vsplit.addWidget(make_chart_panel("Category breakdown", self._cat_breakdown))
 
         cl.addWidget(vsplit)
@@ -959,29 +763,44 @@ class MainWindow(QMainWindow):
             self._on_reload_done(self._worker.result)
 
     def _on_reload_done(self, result: ParseResult) -> None:
-        self._result = result
-        self._apply_goals_to_tasks()
+        self.setUpdatesEnabled(False)
+        try:
+            self._result = result
+            self._apply_goals_to_tasks()
 
-        all_dates: set[date] = set()
-        for t in result.tasks:
-            for s in t.sessions:
-                all_dates.add(s.date)
-        self._all_dates = sorted(all_dates)
+            all_dates: set[date] = set()
+            for t in result.tasks:
+                for s in t.sessions:
+                    all_dates.add(s.date)
+            self._all_dates = sorted(all_dates)
 
-        if self._all_dates:
-            self._range_slider.set_count(len(self._all_dates))
-            self._date_low  = 0
-            self._date_high = len(self._all_dates) - 1
+            if self._all_dates:
+                new_count = len(self._all_dates)
+                prev_high = self._date_high
+                self._range_slider.set_count(new_count)
+                # Preserve range on auto-reload (when user has set a non-default range)
+                if prev_high == 0 or prev_high >= new_count:
+                    self._date_low  = 0
+                    self._date_high = new_count - 1
+                else:
+                    self._date_low  = min(self._date_low,  new_count - 1)
+                    self._date_high = min(self._date_high, new_count - 1)
+                self._range_slider.set_range(self._date_low, self._date_high)
 
-        ts = result.parsed_at.strftime("%H:%M:%S")
-        self._updated_lbl.setText(f"Updated {ts}  ·  {len(result.tasks)} tasks")
+            ts = result.parsed_at.strftime("%H:%M:%S")
+            self._updated_lbl.setText(f"Updated {ts}  ·  {len(result.tasks)} tasks")
+            if hasattr(self, "_footer_time"):
+                self._footer_time.setText(ts)
 
-        self._rebuild_task_rows()
-        self._rebuild_category_tabs()
-        self._refresh_all()
-        if self._cal_tab:
-            self._cal_tab.refresh(result)
-        self._rebuild_goal_rows()
+            self._rebuild_task_rows()
+            self._refresh_all()
+            if self._cal_tab:
+                self._cal_tab.refresh(result)
+            self._rebuild_goal_rows()
+            if hasattr(self, "_session_bar"):
+                self._update_session_bar()
+        finally:
+            self.setUpdatesEnabled(True)
 
     def _on_reload_error(self, msg: str) -> None:
         self._updated_lbl.setText("Error — see console")
@@ -1024,195 +843,352 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
-    # ── Task rows ────────────────────────────────────────
+    # ── Sidebar task list (grouped by category) ──────────
 
     def _rebuild_task_rows(self) -> None:
+        """Rebuild the sidebar task list, grouped by category."""
         while self._task_layout.count() > 1:
             item = self._task_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+            if w := item.widget():
+                w.hide()
+                w.deleteLater()
 
         if not self._result:
             return
 
-        # Decide which tasks to show
-        visible_tasks = []
-        hidden_archived = 0
-        for t in self._result.tasks:
-            if t.archived:
-                if self._show_archived:
-                    visible_tasks.append(t)
-                else:
-                    hidden_archived += 1
-                continue
-            visible_tasks.append(t)
+        visible_tasks = [
+            t for t in self._result.tasks
+            if not t.archived or self._show_archived
+        ]
+        hidden_archived = sum(1 for t in self._result.tasks if t.archived and not self._show_archived)
 
         all_sec = [t.total_seconds for t in visible_tasks]
         max_sec = max(all_sec) if all_sec else 1.0
 
-        self._task_rows = {}
-        for t in sorted(visible_tasks, key=lambda t: t.total_seconds, reverse=True):
-            elapsed = (t.open_session.duration.total_seconds()
-                       if t.open_session else 0)
-            cat_colour = _swatch_for_tag(
-                _CATEGORY_COLOUR_TAG_IMPORT.get(t.tag, "none")
-            )
-            row = TaskRow(
-                task_name        = t.name,
-                colour           = t.colour,
-                total_sec        = t.total_seconds,
-                max_sec          = max_sec,
-                n_sessions       = t.session_count,
-                clocked_in       = t.is_clocked_in,
-                elapsed_sec      = elapsed,
-                category_colour  = cat_colour,
-                archived         = t.archived,
-            )
-            row.clock_in_requested.connect(self._on_clock_in)
-            row.clock_out_requested.connect(self._on_clock_out)
-            row.rename_requested.connect(self._on_rename_task)
-            row.move_requested.connect(self._on_move_task)
-            row.delete_requested.connect(self._on_delete_task)
-            row.archive_requested.connect(self._on_archive_task)
-            row.clicked.connect(self._open_task_tab)
-            self._task_layout.insertWidget(self._task_layout.count() - 1, row)
-            self._task_rows[t.name] = row
+        # Group tasks by category (preserve category order from self._categories)
+        cat_order = [c[0] for c in self._categories] if self._categories else []
+        by_cat: dict[str, list] = {}
+        for t in visible_tasks:
+            by_cat.setdefault(t.tag or "none", []).append(t)
 
-        # Footer hint when tasks are hidden
+        # Sort tasks within each category by total_seconds desc
+        for tasks in by_cat.values():
+            tasks.sort(key=lambda t: t.total_seconds, reverse=True)
+
+        # Build ordered list of (cat_name, cat_color) respecting DB order
+        ordered_cats = []
+        for cat_name, colour_tag in self._categories:
+            if cat_name in by_cat:
+                ordered_cats.append((cat_name, _swatch_for_tag(colour_tag)))
+        # Any category in data but not in self._categories (shouldn't happen normally)
+        for cat in by_cat:
+            if cat not in {c[0] for c in ordered_cats}:
+                ordered_cats.append((cat, MUTED))
+
+        insert_at = self._task_layout.count() - 1  # before the stretch
+
+        for cat_name, cat_color in ordered_cats:
+            tasks = by_cat.get(cat_name, [])
+            if not tasks:
+                continue
+
+            # Category total
+            cat_total_sec = sum(t.total_seconds for t in tasks)
+
+            collapsed = cat_name in self._collapsed_cats
+
+            # Category header row
+            cat_row = QWidget()
+            cat_row.setCursor(Qt.PointingHandCursor)
+            cat_row.setStyleSheet("QWidget { background: transparent; }")
+            cr = QHBoxLayout(cat_row)
+            cr.setContentsMargins(PAD_MD, 6, PAD_MD, 6)
+            cr.setSpacing(8)
+
+            arrow_btn = QPushButton("▸" if collapsed else "▾")
+            arrow_btn.setFlat(True)
+            arrow_btn.setFixedSize(18, 18)
+            arrow_btn.setCursor(Qt.PointingHandCursor)
+            arrow_btn.setStyleSheet(
+                f"QPushButton {{ color: {MUTED}; font-size: 10px; font-family: {FONT_MONO};"
+                f" border: none; background: transparent; padding: 0; }}"
+                f" QPushButton:hover {{ color: {TEXT}; }}"
+            )
+            arrow_btn.clicked.connect(
+                lambda _checked=False, cn=cat_name, ab=arrow_btn: self._toggle_cat_collapse(cn, ab)
+            )
+            cr.addWidget(arrow_btn)
+
+            dot_lbl = QLabel("⬤")
+            dot_lbl.setFixedWidth(14)
+            dot_lbl.setStyleSheet(
+                f"color: {cat_color}; font-size: 11px; background: transparent; border: none;"
+            )
+            cr.addWidget(dot_lbl)
+
+            cap = cat_name[:1].upper() + cat_name[1:] if cat_name else cat_name
+            cat_lbl = QLabel(cap)
+            cat_lbl.setStyleSheet(
+                f"color: {TEXT}; font-size: 14px; font-family: {FONT_UI}; font-weight: 600;"
+                f" background: transparent; border: none;"
+            )
+            cr.addWidget(cat_lbl, stretch=1)
+
+            cat_hrs = QLabel(fmt_dur(cat_total_sec, short=True))
+            cat_hrs.setStyleSheet(
+                f"color: {MUTED}; font-size: 12px; font-family: {FONT_MONO};"
+                f" background: transparent; border: none;"
+            )
+            cr.addWidget(cat_hrs)
+
+            view_key = f"cat:{cat_name}"
+            cat_row.mousePressEvent = (
+                lambda e, k=view_key: self._select_view(k) if e.button() == Qt.LeftButton else None
+            )
+            self._task_layout.insertWidget(insert_at, cat_row)
+            insert_at += 1
+
+            # Task items (indented, hidden if collapsed)
+            task_widgets = []
+            for t in tasks:
+                item = self._make_sidebar_task_item(t, max_sec)
+                item.setVisible(not collapsed)
+                self._task_layout.insertWidget(insert_at, item)
+                task_widgets.append(item)
+                insert_at += 1
+            self._sidebar_cat_items[cat_name] = task_widgets
+
+        # "+" new task button
         if hidden_archived > 0 and not self._show_archived:
             hint = label(f"{hidden_archived} archived hidden", FAINT, size=9)
             hint.setAlignment(Qt.AlignCenter)
             hint.setContentsMargins(0, 4, 0, 4)
-            self._task_layout.insertWidget(self._task_layout.count() - 1, hint)
+            self._task_layout.insertWidget(insert_at, hint)
+            insert_at += 1
 
-        # "+ New Task" button at the bottom of the list
         add_btn = QPushButton("+ New Task")
-        add_btn.setFixedHeight(28)
+        add_btn.setFixedHeight(26)
         add_btn.setStyleSheet(
             f"QPushButton {{ background: transparent; color: {FAINT};"
-            f" border: 1px dashed {BORDER}; border-radius: 5px;"
-            f" font-size: 10px; margin: 4px 0px; }}"
+            f" border: 1px dashed {BORDER}; border-radius: {RADIUS}px;"
+            f" font-size: 10px; margin: 4px 8px; }}"
             f" QPushButton:hover {{ color: {MUTED}; border-color: {BORDER2}; }}"
         )
         add_btn.clicked.connect(self._on_new_task)
-        self._task_layout.insertWidget(self._task_layout.count() - 1, add_btn)
+        self._task_layout.insertWidget(insert_at, add_btn)
 
         self._rebuild_goal_rows()
+
+    def _make_sidebar_task_item(self, task, max_sec: float) -> QWidget:
+        """Compact task item for the sidebar."""
+        item = QWidget()
+        item.setCursor(Qt.PointingHandCursor)
+        item.setObjectName(f"SidebarTask")
+        item.setContextMenuPolicy(Qt.CustomContextMenu)
+        item.customContextMenuRequested.connect(
+            lambda pos, n=task.name: self._sidebar_task_menu(
+                n, item.mapToGlobal(pos))
+        )
+
+        il = QHBoxLayout(item)
+        il.setContentsMargins(28, 8, PAD_MD, 8)
+        il.setSpacing(10)
+
+        dot = QLabel("⬤")
+        dot.setFixedWidth(14)
+        dot.setStyleSheet(
+            f"color: {task.colour}; font-size: 11px; background: transparent; border: none;"
+        )
+        il.addWidget(dot)
+
+        name_lbl = QLabel(task.name)
+        name_lbl.setStyleSheet(
+            f"color: {ACCENT if task.is_clocked_in else TEXT}; font-size: 14px;"
+            f" font-family: {FONT_UI}; background: transparent; border: none;"
+        )
+        il.addWidget(name_lbl, stretch=1)
+
+        # 44×4 mini progress bar
+        pct = task.total_seconds / max_sec if max_sec > 0 else 0
+        bar_outer = QFrame()
+        bar_outer.setFixedSize(44, 4)
+        bar_outer.setStyleSheet(f"background: {BG3}; border-radius: 2px;")
+        bar_fill = QFrame(bar_outer)
+        fill_w = max(2, int(pct * 44))
+        fill_c = QColor(task.colour)
+        fill_c.setAlphaF(0.8)
+        bar_fill.setGeometry(0, 0, fill_w, 4)
+        bar_fill.setStyleSheet(
+            f"background: {fill_c.name(QColor.HexArgb)}; border-radius: 2px;"
+        )
+        il.addWidget(bar_outer)
+
+        hrs_lbl = QLabel(fmt_dur(task.total_seconds, short=True))
+        hrs_lbl.setStyleSheet(
+            f"color: {MUTED}; font-size: 12px; font-family: {FONT_MONO};"
+            f" background: transparent; border: none;"
+        )
+        il.addWidget(hrs_lbl)
+
+        # Style for selected/active state (left border)
+        if task.is_clocked_in:
+            item.setStyleSheet(
+                f"QWidget#SidebarTask {{ border-left: 2px solid {ACCENT}; background: transparent; }}"
+            )
+        else:
+            item.setStyleSheet(
+                f"QWidget#SidebarTask {{ border-left: 2px solid transparent; background: transparent; }}"
+            )
+
+        item.mousePressEvent = lambda e, n=task.name: self._on_sidebar_task_click(n)
+        return item
+
+    def _on_sidebar_task_click(self, task_name: str) -> None:
+        self._select_view(f"task:{task_name}")
+
+    def _toggle_cat_collapse(self, cat_name: str, arrow_widget) -> None:
+        if cat_name in self._collapsed_cats:
+            self._collapsed_cats.discard(cat_name)
+            arrow_widget.setText("▾")
+        else:
+            self._collapsed_cats.add(cat_name)
+            arrow_widget.setText("▸")
+        for w in self._sidebar_cat_items.get(cat_name, []):
+            w.setVisible(cat_name not in self._collapsed_cats)
+
+    def _sidebar_task_menu(self, task_name: str, global_pos) -> None:
+        task = self._result.task_by_name(task_name) if self._result else None
+        if not task:
+            return
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            f"QMenu {{ background: {BG3}; color: {TEXT}; border: 1px solid {BORDER};"
+            f" border-radius: {RADIUS}px; font-size: 10px; font-family: {FONT_UI}; }}"
+            f" QMenu::item {{ padding: 4px 16px; }}"
+            f" QMenu::item:selected {{ background: {BG4}; }}"
+        )
+        if task.is_clocked_in:
+            menu.addAction("■ Stop tracking", lambda: self._on_clock_out(task_name))
+        else:
+            menu.addAction("▶ Clock in", lambda: self._on_clock_in(task_name))
+        menu.addSeparator()
+        menu.addAction("Rename…", lambda: self._on_rename_task(task_name))
+        menu.addAction("Move to category…", lambda: self._on_move_task(task_name))
+        menu.addSeparator()
+        if task.archived:
+            menu.addAction("Unarchive", lambda: self._on_archive_task(task_name, False))
+        else:
+            menu.addAction("Archive", lambda: self._on_archive_task(task_name, True))
+        menu.addAction("Delete…", lambda: self._on_delete_task(task_name))
+        menu.exec_(global_pos)
 
     def _rebuild_goal_rows(self) -> None:
         if not self._result:
             return
-        # Pass ALL tasks with goals to GoalsTab — it handles filtering internally
-        all_goal_tasks = [
-            t for t in self._result.tasks
-            if t.goal_hours > 0
-        ]
+        all_goal_tasks = [t for t in self._result.tasks if t.goal_hours > 0]
         if self._goals_tab:
             self._goals_tab.refresh(all_goal_tasks, self._goals)
-
-        # Sidebar strip shows only active (non-archived, non-auto-archived) goals
-        today = date.today()
-        active_tasks = [
-            t for t in all_goal_tasks
-            if not _goal_is_archived(self._goals.get(t.name, GoalSpec()), today)
-        ]
-        self._rebuild_goals_strip(active_tasks)
+        if hasattr(self, "_goals_strip"):
+            self._rebuild_goals_strip(all_goal_tasks)
 
     def _rebuild_goals_strip(self, tasks_with_goals: list) -> None:
-        """Compact top-3 goals by completion % shown at the bottom of the left panel."""
+        """Top-3 goals by closest deadline shown at bottom of left panel."""
         while self._goals_strip_layout.count():
             item = self._goals_strip_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+            if w := item.widget():
+                w.hide()
+                w.deleteLater()
 
-        if not tasks_with_goals:
+        today = date.today()
+        active = [
+            t for t in tasks_with_goals
+            if not _goal_is_archived(self._goals.get(t.name, GoalSpec()), today)
+        ]
+        if not active:
             self._goals_strip.setVisible(False)
             return
 
         self._goals_strip.setVisible(True)
 
-        # header row
+        # Header
         hdr = QHBoxLayout()
-        hdr.setSpacing(4)
-        h_lbl = QLabel("Top Goals")
+        h_lbl = QLabel("GOALS")
         h_lbl.setStyleSheet(
-            f"color: {MUTED}; font-size: 9px; font-weight: 600; letter-spacing: 0.5px;"
-            f" background: transparent; border: none;"
+            f"color: {MUTED}; font-size: 8px; font-family: {FONT_MONO};"
+            f" letter-spacing: 1px; background: transparent; border: none;"
         )
         hdr.addWidget(h_lbl)
         hdr.addStretch()
         see_all = QPushButton("See all →")
         see_all.setFlat(True)
+        see_all.setCursor(Qt.PointingHandCursor)
         see_all.setStyleSheet(
             f"color: {ACCENT}; font-size: 9px; background: transparent; border: none;"
         )
-        see_all.setCursor(Qt.PointingHandCursor)
-        see_all.clicked.connect(lambda: self._switch_to_goals_tab())
+        see_all.clicked.connect(self._switch_to_goals_tab)
         hdr.addWidget(see_all)
         self._goals_strip_layout.addLayout(hdr)
 
-        # top-3 by completion %
-        top3 = sorted(tasks_with_goals, key=lambda t: t.goal_progress(), reverse=True)[:3]
+        # Sort: tasks with deadlines first (nearest first), then rest
+        def _sort_key(t):
+            dl = t.deadline_days_left()
+            return (0 if dl is not None else 1, dl if dl is not None else 9999)
+
+        top3 = sorted(active, key=_sort_key)[:3]
         for t in top3:
-            pct  = t.goal_progress()
-            row  = QWidget()
+            pct = t.goal_progress()
+            dl  = t.deadline_days_left()
+
+            row = QWidget()
+            row.setCursor(Qt.PointingHandCursor)
             row.setStyleSheet("background: transparent;")
-            rl   = QVBoxLayout(row)
+            rl = QVBoxLayout(row)
             rl.setContentsMargins(0, 2, 0, 2)
             rl.setSpacing(2)
 
             name_row = QHBoxLayout()
             name_row.setSpacing(4)
             dot = QLabel("●")
-            dot.setStyleSheet(
-                f"color: {t.colour}; font-size: 9px; background: transparent; border: none;"
-            )
             dot.setFixedWidth(10)
+            dot.setStyleSheet(
+                f"color: {t.colour}; font-size: 6px; background: transparent; border: none;"
+            )
             name_row.addWidget(dot)
-            name_lbl = QLabel(t.name)
+            name_lbl = QLabel(t.name if len(t.name) <= 18 else t.name[:17] + "…")
             name_lbl.setStyleSheet(
-                f"color: {TEXT}; font-size: 9px; background: transparent; border: none;"
+                f"color: {TEXT}; font-size: 10px; background: transparent; border: none;"
             )
             name_row.addWidget(name_lbl, stretch=1)
-            pct_lbl = QLabel(f"{int(pct * 100)}%")
-            pct_color = SUCCESS if pct >= 1.0 else (WARNING if pct >= 0.5 else MUTED)
-            pct_lbl.setStyleSheet(
-                f"color: {pct_color}; font-size: 9px; font-family: Consolas, monospace;"
-                f" background: transparent; border: none;"
-            )
-            name_row.addWidget(pct_lbl)
+
+            if dl is not None:
+                dl_color = DANGER if dl < 5 else (WARNING if dl < 14 else MUTED)
+                dl_lbl = QLabel(f"{dl}d")
+                dl_lbl.setStyleSheet(
+                    f"color: {dl_color}; font-size: 9px; font-family: {FONT_MONO};"
+                    f" background: transparent; border: none;"
+                )
+                name_row.addWidget(dl_lbl)
             rl.addLayout(name_row)
 
-            # mini progress bar
-            bar = QWidget()
-            bar.setFixedHeight(3)
-            bar.setStyleSheet(f"background: {BG3}; border-radius: 1px;")
-            bar_fill = QWidget(bar)
-            fill_w = max(3, int(pct * (bar.sizeHint().width() or 200)))
-            bar_fill.setStyleSheet(f"background: {t.colour}; border-radius: 1px;")
-            bar.setMinimumWidth(50)
-
-            # We use a layout-based approach for the mini bar
+            # Mini progress bar
             bar_outer = QWidget()
-            bar_outer.setFixedHeight(4)
-            bar_outer.setStyleSheet(f"background: {BG3}; border-radius: 2px;")
+            bar_outer.setFixedHeight(3)
+            bar_outer.setStyleSheet(f"background: {BG3}; border-radius: 1px;")
             bar_lay = QHBoxLayout(bar_outer)
             bar_lay.setContentsMargins(0, 0, 0, 0)
             bar_lay.setSpacing(0)
             fill = QWidget()
-            fill.setFixedHeight(4)
-            fill.setStyleSheet(f"background: {t.colour}; border-radius: 2px;")
-            bar_lay.addWidget(fill, stretch=int(pct * 100))
+            fill.setFixedHeight(3)
+            fill.setStyleSheet(f"background: {t.colour}; border-radius: 1px;")
+            bar_lay.addWidget(fill, stretch=max(1, int(pct * 100)))
             bar_lay.addStretch(max(1, 100 - int(pct * 100)))
             rl.addWidget(bar_outer)
 
+            row.mousePressEvent = lambda e, n=t.name: self._open_task_view(n)
             self._goals_strip_layout.addWidget(row)
 
     def _switch_to_goals_tab(self) -> None:
-        for i in range(self._tabs.count()):
-            if self._tabs.widget(i) is self._goals_tab:
-                self._tabs.setCurrentIndex(i)
-                break
+        self._select_view("goals")
 
     # ── Chart refresh ────────────────────────────────────
 
@@ -1248,23 +1224,19 @@ class MainWindow(QMainWindow):
         start = self._all_dates[self._date_low]
         end   = self._all_dates[self._date_high]
 
-        # Refresh category tabs
-        for tab in self._category_tabs.values():
+        # Refresh category views
+        for tab in self._category_views.values():
             tab.refresh(start, end, self._result.tasks, self._goals)
 
-        # Refresh task tabs
-        for task_name, tab in list(self._task_tabs.items()):
+        # Refresh task views
+        for task_name, tab in list(self._task_views.items()):
             task = self._result.task_by_name(task_name)
             if task:
                 tab.update_task(task)
                 tab.refresh(start, end)
             else:
-                # Task was deleted — remove its tab
-                for i in range(self._tabs.count()):
-                    if self._tabs.widget(i) is tab:
-                        self._tabs.removeTab(i)
-                        break
-                self._task_tabs.pop(task_name, None)
+                self._stack.removeWidget(tab)
+                self._task_views.pop(task_name, None)
                 tab.deleteLater()
 
     def _current_stats(self) -> Optional[RangeStats]:
@@ -1275,6 +1247,7 @@ class MainWindow(QMainWindow):
         return RangeStats(self._result.tasks, s, e)
 
     def _update_metric_cards(self, stats: RangeStats) -> None:
+        import statistics as _stats
         from datetime import date as _date
         today = _date.today()
         today_sec = sum(
@@ -1283,9 +1256,13 @@ class MainWindow(QMainWindow):
             for s in t.sessions
             if s.start.date() == today
         )
+        today_sess = sum(
+            1 for t in (self._result.tasks if self._result else [])
+            for s in t.sessions if s.start.date() == today
+        )
         self._mc_today.update_value(
             fmt_dur(today_sec, short=True),
-            f"{today_sec / 3600:.1f}h so far",
+            f"{today_sess} session{'s' if today_sess != 1 else ''} today",
         )
 
         self._mc_total.update_value(
@@ -1297,15 +1274,23 @@ class MainWindow(QMainWindow):
             len(t.sessions_in_range(stats.start, stats.end))
             for t in stats.tasks
         )
-        self._mc_sessions.update_value(str(n_sess),
-                                       f"over {stats.n_days} days")
+        spd = n_sess / max(1, stats.n_days)
+        self._mc_sessions.update_value(
+            str(n_sess),
+            f"μ {spd:.1f}/day  ·  {stats.n_days}d",
+        )
 
         closed = [s for t in stats.tasks
                   for s in t.sessions_in_range(stats.start, stats.end)
                   if not s.is_open]
         if closed:
-            avg = sum(s.duration_seconds for s in closed) / len(closed)
-            self._mc_avg.update_value(fmt_dur(avg, short=True))
+            durations = [s.duration_seconds for s in closed]
+            avg = sum(durations) / len(durations)
+            std = _stats.stdev(durations) if len(durations) > 1 else 0.0
+            self._mc_avg.update_value(
+                fmt_dur(avg, short=True),
+                f"σ {fmt_dur(std, short=True)}",
+            )
         else:
             self._mc_avg.update_value("—")
 
@@ -1352,9 +1337,15 @@ class MainWindow(QMainWindow):
     def _on_tick(self) -> None:
         if not self._result:
             return
-        for t in self._result.tasks:
-            if t.is_clocked_in and t.name in self._task_rows:
-                self._task_rows[t.name].update_elapsed(
+        # Update footer clock
+        if hasattr(self, "_footer_time"):
+            from datetime import datetime as _dt
+            self._footer_time.setText(_dt.now().strftime("%H:%M:%S"))
+        # Update session bar timer
+        if self._clocked_task:
+            t = self._result.task_by_name(self._clocked_task)
+            if t and t.is_clocked_in and t.open_session:
+                self._update_session_bar_time(
                     t.open_session.duration.total_seconds()
                 )
 
@@ -1454,55 +1445,16 @@ class MainWindow(QMainWindow):
         self._categories = self._store.load_categories()
         self._trigger_reload()
 
-    # ── Tab management ───────────────────────────────────
+    # ── View management (stacked widget) ─────────────────
 
-    def _rebuild_category_tabs(self) -> None:
-        """Recreate category tabs, preserving any open task tabs."""
-        # Remember the currently active widget so we can restore it
-        current_widget = self._tabs.currentWidget()
-
-        # Remove only the existing category tabs (leave task tabs in place)
-        for old_tab in list(self._category_tabs.values()):
-            for i in range(self._tabs.count()):
-                if self._tabs.widget(i) is old_tab:
-                    self._tabs.removeTab(i)
-                    break
-            old_tab.deleteLater()
-        self._category_tabs.clear()
-
-        if not self._result:
+    def _open_task_view(self, task_name: str) -> None:
+        """Show the task detail view in the stacked widget."""
+        if task_name in self._task_views:
+            self._current_view = f"task:{task_name}"
+            self._update_nav_highlight()
+            self._stack.setCurrentWidget(self._task_views[task_name])
+            self._sync_combo_to_task(task_name)
             return
-
-        # Insert category tabs after Overview (0), Calendar (1), Goals (2)
-        insert_at = 3
-        seen: set[str] = set()
-        for t in self._result.tasks:
-            if t.tag and t.tag not in seen:
-                seen.add(t.tag)
-                tab = CategoryTabWidget(t.tag, parent=self)
-                cap = t.tag[:1].upper() + t.tag[1:] if t.tag else t.tag
-                display = cap if len(cap) <= 14 else cap[:13] + "…"
-                self._tabs.insertTab(insert_at, tab, display)
-                self._tabs.tabBar().setTabButton(
-                    insert_at, self._tabs.tabBar().RightSide, None)
-                self._category_tabs[t.tag] = tab
-                insert_at += 1
-
-        # Restore the previously active tab
-        if current_widget is not None:
-            for i in range(self._tabs.count()):
-                if self._tabs.widget(i) is current_widget:
-                    self._tabs.setCurrentIndex(i)
-                    return
-
-    def _open_task_tab(self, task_name: str) -> None:
-        """Open or focus the task detail tab for the given task."""
-        if task_name in self._task_tabs:
-            tab = self._task_tabs[task_name]
-            for i in range(self._tabs.count()):
-                if self._tabs.widget(i) is tab:
-                    self._tabs.setCurrentIndex(i)
-                    return
         if not self._result:
             return
         task = self._result.task_by_name(task_name)
@@ -1514,33 +1466,28 @@ class MainWindow(QMainWindow):
         tab.add_session_requested.connect(self._on_add_session)
         tab.edit_goal_requested.connect(self._on_edit_single_goal)
         tab.remove_goal_requested.connect(self._on_cancel_goal)
-        display = task_name if len(task_name) <= 14 else task_name[:13] + "…"
-        self._tabs.addTab(tab, display)
-        self._task_tabs[task_name] = tab
-        self._tabs.setCurrentWidget(tab)
+        self._stack.addWidget(tab)
+        self._task_views[task_name] = tab
+        self._current_view = f"task:{task_name}"
+        self._update_nav_highlight()
+        self._stack.setCurrentWidget(tab)
+        self._sync_combo_to_task(task_name)
 
-        # Refresh immediately with current range
         if self._all_dates:
             tab.refresh(
                 self._all_dates[self._date_low],
                 self._all_dates[self._date_high],
             )
 
-    def _on_tab_close_requested(self, index: int) -> None:
-        """Only task tabs are closable."""
-        w = self._tabs.widget(index)
-        if isinstance(w, TaskTabWidget):
-            self._task_tabs.pop(w.task_name, None)
-            self._tabs.removeTab(index)
-            w.deleteLater()
-
-    def _on_tab_moved(self, from_idx: int, to_idx: int) -> None:
-        """Keep Overview and Calendar tabs pinned at positions 0 and 1."""
-        if from_idx <= 1 or to_idx <= 1:
-            bar = self._tabs.tabBar()
-            bar.blockSignals(True)
-            bar.moveTab(to_idx, from_idx)  # undo the move
-            bar.blockSignals(False)
+    def _sync_combo_to_task(self, task_name: str) -> None:
+        """Set the clock-in combo to task_name if not currently clocked in."""
+        if self._clocked_task:
+            return
+        if not hasattr(self, "_session_combo"):
+            return
+        idx = self._session_combo.findText(task_name)
+        if idx >= 0:
+            self._session_combo.setCurrentIndex(idx)
 
     # ── Task editing ─────────────────────────────────────
 
@@ -1591,14 +1538,14 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.warning(self, "Delete failed", str(e))
             return
-        # Close any open task tab for this task
-        if task_name in self._task_tabs:
-            tab = self._task_tabs.pop(task_name)
-            for i in range(self._tabs.count()):
-                if self._tabs.widget(i) is tab:
-                    self._tabs.removeTab(i)
-                    break
+        # Remove task view from stack if open
+        if task_name in self._task_views:
+            tab = self._task_views.pop(task_name)
+            self._stack.removeWidget(tab)
             tab.deleteLater()
+            # Go back to overview if we were viewing the deleted task
+            if self._current_view == f"task:{task_name}":
+                self._select_view("overview")
         self._trigger_reload()
 
     def _on_archive_task(self, task_name: str, archived: bool) -> None:
@@ -1619,36 +1566,26 @@ class MainWindow(QMainWindow):
     # ── Theme toggle ─────────────────────────────────────────
 
     def _on_toggle_theme(self) -> None:
-        # Remember active tab so we can restore it after rebuild
-        saved_tab = ""
-        if hasattr(self, "_tabs"):
-            idx = self._tabs.currentIndex()
-            if idx >= 0:
-                saved_tab = self._tabs.tabBar().tabText(idx)
+        saved_view = getattr(self, "_current_view", "overview")
 
         from ..ui import theme as _theme
-        # Switch palette module-level vars and propagate to consumer modules
         if _theme.IS_DARK:
             _theme.set_light_mode()
             self._theme_btn.setText("☾ Dark")
         else:
             _theme.set_dark_mode()
             self._theme_btn.setText("☀ Light")
-        # Rebuild UI with new colours; preserve data state
-        self._category_tabs = {}
-        self._task_tabs     = {}
-        self._task_rows     = {}
+
+        self._category_views = {}
+        self._task_views     = {}
+        self._current_view   = "overview"
         self._build_ui()
         self._apply_palette()
         if self._result:
             self._on_reload_done(self._result)
 
-        # Restore the tab the user was on
-        if saved_tab:
-            for i in range(self._tabs.count()):
-                if self._tabs.tabBar().tabText(i) == saved_tab:
-                    self._tabs.setCurrentIndex(i)
-                    break
+        if saved_view and saved_view in self._stack_base:
+            self._select_view(saved_view)
 
     # ── Session management ───────────────────────────────────
 

@@ -1,5 +1,10 @@
 """
 core/models.py — Pure data models. No UI, no file I/O.
+
+Field naming note: Task.start_line holds the DB tasks.id, and
+Session.line_index holds the DB clock record id.  The db_id properties
+below provide clearer names; start_line / line_index are kept for
+backwards-compatibility with existing callers.
 """
 
 from __future__ import annotations
@@ -46,7 +51,11 @@ def colour_for_tag(tag: str, index: int) -> str:
 class Session:
     start: datetime
     end: Optional[datetime]   # None = currently clocked in
-    line_index: int           # line in the source file
+    line_index: int           # holds DB clock record id
+
+    @property
+    def db_id(self) -> int:
+        return self.line_index
 
     @property
     def is_open(self) -> bool:
@@ -82,14 +91,41 @@ class GoalSpec:
     completed_on: Optional[date] = None  # set when goal first reaches 100%
     archived:     bool           = False  # manually archived by user
 
+    def progress(self, task: "Task") -> float:
+        """0.0–1.0 completion ratio, capped at 1."""
+        if self.hours <= 0:
+            return 0.0
+        return min(1.0, task.total_hours / self.hours)
+
+    def is_on_track(self, task: "Task") -> bool:
+        """True if current pace would meet the deadline."""
+        if not self.deadline or self.hours <= 0:
+            return True
+        days_elapsed = max(1, (date.today() - task.sessions[0].date).days) if task.sessions else 1
+        daily_actual = task.total_hours / days_elapsed
+        days_left = (self.deadline - date.today()).days
+        if days_left <= 0:
+            return task.total_hours >= self.hours
+        required = max(0.0, self.hours - task.total_hours) / days_left
+        return daily_actual >= required * 0.9
+
+    def days_remaining(self) -> Optional[int]:
+        if not self.deadline:
+            return None
+        return (self.deadline - date.today()).days
+
 
 @dataclass
 class Task:
     name: str
     tag: str
     colour: str
-    start_line: int
+    start_line: int          # holds DB tasks.id
     sessions:      list[Session]   = field(default_factory=list)
+
+    @property
+    def db_id(self) -> int:
+        return self.start_line
     goal_hours:    float           = 0.0   # target total hours (0 = no goal)
     goal_deadline: Optional[date]  = None  # optional deadline
     archived:      bool            = False

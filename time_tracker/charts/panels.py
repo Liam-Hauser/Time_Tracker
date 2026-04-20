@@ -19,7 +19,8 @@ from ..core.analytics import RangeStats, WeeklyComparison, date_range, TaskSessi
 from ..core.models import Task, GoalSpec, fmt_dur
 from ..ui.theme import (
     BG2, BG3, BG4, BORDER, BORDER2,
-    TEXT, MUTED, FAINT, ACCENT, SUCCESS, WARNING, DANGER,
+    TEXT, DIM, MUTED, FAINT, ACCENT, SUCCESS, WARNING, DANGER,
+    FONT_MONO, CHART_COLORS,
     WEEKDAY_SHORT,
 )
 
@@ -28,8 +29,9 @@ from ..ui.theme import (
 # Drawing helpers
 # ──────────────────────────────────────────────────────────
 
-def _font(size: int = 9, bold: bool = False) -> QFont:
-    f = QFont("Segoe UI", size)
+def _font(size: int = 9, bold: bool = False, mono: bool = False) -> QFont:
+    family = FONT_MONO if mono else "Geist, Segoe UI, -apple-system, sans-serif"
+    f = QFont(family, size)
     f.setBold(bold)
     f.setHintingPreference(QFont.PreferFullHinting)
     return f
@@ -128,7 +130,11 @@ class NativeChart(QWidget):
 
     def _draw_h_grid(self, p: QPainter, rect: QRect,
                      ticks: list[float], max_val: float) -> None:
-        p.setPen(QPen(QColor(BORDER), 1, Qt.SolidLine))
+        grid_col = QColor(BORDER2)
+        grid_col.setAlphaF(0.45)
+        pen = QPen(grid_col, 1, Qt.DashLine)
+        pen.setDashPattern([4, 4])
+        p.setPen(pen)
         for t in ticks:
             if max_val <= 0:
                 break
@@ -138,9 +144,10 @@ class NativeChart(QWidget):
     def _draw_y_labels(self, p: QPainter, rect: QRect,
                        ticks: list[float], max_val: float,
                        unit: str = "h") -> None:
-        p.setFont(_font(9))
+        f = _font(8, mono=True)
+        p.setFont(f)
         p.setPen(QColor(MUTED))
-        fm = QFontMetrics(_font(9))
+        fm = QFontMetrics(f)
         for t in ticks:
             if max_val <= 0:
                 break
@@ -152,7 +159,7 @@ class NativeChart(QWidget):
 
     def _draw_x_date_labels(self, p: QPainter, rect: QRect,
                              days: list[date]) -> None:
-        p.setFont(_font(9))
+        p.setFont(_font(8, mono=True))
         p.setPen(QColor(MUTED))
         for idx, lbl in _smart_date_ticks(days):
             x = rect.x() + idx / max(1, len(days) - 1) * rect.width()
@@ -179,7 +186,7 @@ class NativeChart(QWidget):
             if x + item_w > x0 + max_w and x > x0:
                 row += 1
                 if row >= max_rows:
-                    p.setPen(QColor(MUTED))
+                    p.setPen(QColor(DIM))
                     p.drawText(QRectF(x, y, 20, ITEM_H), Qt.AlignVCenter, "…")
                     break
                 x = x0
@@ -189,7 +196,7 @@ class NativeChart(QWidget):
             p.drawRoundedRect(
                 QRectF(x, y + (ITEM_H - DOT) / 2, DOT, DOT), 2, 2)
             p.setBrush(Qt.NoBrush)
-            p.setPen(QColor(MUTED))
+            p.setPen(QColor(DIM))
             p.drawText(QRectF(x + DOT + GAP_TEXT, y, item_w, ITEM_H),
                        Qt.AlignVCenter, name)
             x += item_w

@@ -16,8 +16,9 @@ from PyQt5.QtWidgets import (
 from ..core.models import Task, GoalSpec
 from .theme import (
     BG, BG2, BG3, BORDER, BORDER2,
-    TEXT, MUTED, FAINT, ACCENT, SUCCESS, WARNING, DANGER,
-    PAD_SM, PAD_MD,
+    TEXT, DIM, MUTED, FAINT, ACCENT, SUCCESS, WARNING, DANGER,
+    PAD, PAD_MD, RADIUS, RADIUS_LG,
+    FONT_UI, FONT_MONO, SS,
 )
 
 
@@ -29,7 +30,7 @@ def _lbl(text: str, color: str = TEXT, size: int = 10,
     w.setStyleSheet(
         f"color: {color}; font-size: {size}px; font-weight: {'600' if bold else '400'};"
         f" background: transparent; border: none;"
-        + (f" font-family: Consolas, monospace;" if mono else "")
+        + (f" font-family: {FONT_MONO};" if mono else "")
     )
     return w
 
@@ -96,7 +97,7 @@ class _ProgressBar(QWidget):
         p.setPen(QPen(QColor(BORDER), 1))
         p.drawRect(0, 0, w - 1, h - 1)
         p.setPen(QColor(TEXT))
-        font = QFont("Consolas", 8)
+        font = QFont(FONT_MONO, 8)
         font.setWeight(QFont.DemiBold)
         p.setFont(font)
         p.drawText(0, 0, w, h, Qt.AlignCenter, self._text)
@@ -110,7 +111,7 @@ class _KpiCell(QWidget):
         super().__init__(parent)
         self.setStyleSheet(f"background: {BG2}; border-right: 1px solid {BORDER};")
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(PAD_MD, PAD_SM, PAD_MD, PAD_SM)
+        lay.setContentsMargins(PAD_MD, PAD, PAD_MD, PAD)
         lay.setSpacing(2)
         self._val_lbl = QLabel("—")
         self._val_lbl.setStyleSheet(
@@ -167,7 +168,7 @@ class _GoalCard(QWidget):
         self._badge.setAlignment(Qt.AlignCenter)
         self._badge.setFixedHeight(18)
         self._badge.setStyleSheet(
-            f"font-size: 8px; font-family: Consolas, monospace; letter-spacing: 1px;"
+            f"font-size: 8px; font-family: {FONT_MONO}; letter-spacing: 1px;"
             f" padding: 0 6px; border-radius: 3px; border: 1px solid {MUTED}; color: {MUTED};"
             f" background: transparent;"
         )
@@ -196,7 +197,7 @@ class _GoalCard(QWidget):
         v1 = QFrame(); v1.setFrameShape(QFrame.VLine)
         v1.setStyleSheet(f"color: {BORDER};")
         stats.addWidget(v1)
-        stats.addSpacing(PAD_SM)
+        stats.addSpacing(PAD)
 
         # pace block
         pace_col = QVBoxLayout()
@@ -212,7 +213,7 @@ class _GoalCard(QWidget):
         v2 = QFrame(); v2.setFrameShape(QFrame.VLine)
         v2.setStyleSheet(f"color: {BORDER};")
         stats.addWidget(v2)
-        stats.addSpacing(PAD_SM)
+        stats.addSpacing(PAD)
 
         # sparkline
         spark_col = QVBoxLayout()
@@ -232,12 +233,7 @@ class _GoalCard(QWidget):
 
         self._archive_btn = QPushButton("Archive")
         self._archive_btn.setFixedHeight(24)
-        self._archive_btn.setStyleSheet(
-            f"QPushButton {{ background: transparent; color: {MUTED};"
-            f" border: 1px solid {BORDER}; border-radius: 4px;"
-            f" font-size: 9px; padding: 0 10px; }}"
-            f" QPushButton:hover {{ color: {TEXT}; border-color: {BORDER2}; }}"
-        )
+        self._archive_btn.setStyleSheet(SS.button("ghost"))
         self._archive_btn.clicked.connect(
             lambda: self.archive_clicked.emit(self._task_name)
         )
@@ -245,23 +241,13 @@ class _GoalCard(QWidget):
 
         edit_btn = QPushButton("Edit")
         edit_btn.setFixedHeight(24)
-        edit_btn.setStyleSheet(
-            f"QPushButton {{ background: transparent; color: {MUTED};"
-            f" border: 1px solid {BORDER}; border-radius: 4px;"
-            f" font-size: 9px; padding: 0 10px; }}"
-            f" QPushButton:hover {{ color: {TEXT}; border-color: {BORDER2}; }}"
-        )
+        edit_btn.setStyleSheet(SS.button("ghost"))
         edit_btn.clicked.connect(lambda: self.edit_clicked.emit(self._task_name))
         btn_row.addWidget(edit_btn)
 
         cancel_btn = QPushButton("Remove")
         cancel_btn.setFixedHeight(24)
-        cancel_btn.setStyleSheet(
-            f"QPushButton {{ background: transparent; color: {DANGER};"
-            f" border: 1px solid {DANGER}; border-radius: 4px;"
-            f" font-size: 9px; padding: 0 10px; }}"
-            f" QPushButton:hover {{ background: {DANGER}; color: #fff; }}"
-        )
+        cancel_btn.setStyleSheet(SS.button("danger"))
         cancel_btn.clicked.connect(lambda: self.cancel_clicked.emit(self._task_name))
         btn_row.addWidget(cancel_btn)
 
@@ -286,7 +272,7 @@ class _GoalCard(QWidget):
         # card dimming for archived
         self.setStyleSheet(
             f"QWidget#GoalCard {{ background: {BG2 if not is_archived else BG3};"
-            f" border: 1px solid {BORDER}; border-radius: 6px; opacity: {'1' if not is_archived else '0.6'}; }}"
+            f" border: 1px solid {BORDER}; border-radius: {RADIUS_LG}px; opacity: {'1' if not is_archived else '0.6'}; }}"
         )
 
         # status badge
@@ -308,7 +294,7 @@ class _GoalCard(QWidget):
 
         self._badge.setText(status)
         self._badge.setStyleSheet(
-            f"font-size: 8px; font-family: Consolas, monospace; letter-spacing: 1px;"
+            f"font-size: 8px; font-family: {FONT_MONO}; letter-spacing: 1px;"
             f" padding: 0 6px; border-radius: 3px; border: 1px solid {s_color};"
             f" color: {s_color}; background: transparent;"
         )
@@ -327,7 +313,7 @@ class _GoalCard(QWidget):
             days_since = (date.today() - gs.completed_on).days
             self._dl_days.setText(f"{days_since}d ago")
             self._dl_days.setStyleSheet(
-                f"color: {SUCCESS}; font-size: 9px; font-family: Consolas, monospace;"
+                f"color: {SUCCESS}; font-size: 9px; font-family: {FONT_MONO};"
                 f" background: transparent; border: none;"
             )
         elif task.goal_deadline:
@@ -337,13 +323,13 @@ class _GoalCard(QWidget):
                 dl_color = DANGER if dl_days < 5 else MUTED
                 self._dl_days.setText(f"{dl_days}d left")
                 self._dl_days.setStyleSheet(
-                    f"color: {dl_color}; font-size: 9px; font-family: Consolas, monospace;"
+                    f"color: {dl_color}; font-size: 9px; font-family: {FONT_MONO};"
                     f" background: transparent; border: none;"
                 )
             else:
                 self._dl_days.setText("deadline passed")
                 self._dl_days.setStyleSheet(
-                    f"color: {DANGER}; font-size: 9px; font-family: Consolas, monospace;"
+                    f"color: {DANGER}; font-size: 9px; font-family: {FONT_MONO};"
                     f" background: transparent; border: none;"
                 )
         else:
@@ -356,28 +342,28 @@ class _GoalCard(QWidget):
             pace_color = SUCCESS if daily_avg >= req_hpd else WARNING
             self._pace_val.setText(f"{req_hpd:.1f} h/day")
             self._pace_val.setStyleSheet(
-                f"color: {pace_color}; font-size: 10px; font-family: Consolas, monospace;"
+                f"color: {pace_color}; font-size: 10px; font-family: {FONT_MONO};"
                 f" background: transparent; border: none;"
             )
             self._pace_avg.setText(f"avg7 {daily_avg:.1f}h")
         elif pct >= 1.0:
             self._pace_val.setText("complete")
             self._pace_val.setStyleSheet(
-                f"color: {SUCCESS}; font-size: 10px; font-family: Consolas, monospace;"
+                f"color: {SUCCESS}; font-size: 10px; font-family: {FONT_MONO};"
                 f" background: transparent; border: none;"
             )
             self._pace_avg.setText(f"avg7 {daily_avg:.1f}h")
         elif dl_days is not None and dl_days <= 0:
             self._pace_val.setText("overdue")
             self._pace_val.setStyleSheet(
-                f"color: {DANGER}; font-size: 10px; font-family: Consolas, monospace;"
+                f"color: {DANGER}; font-size: 10px; font-family: {FONT_MONO};"
                 f" background: transparent; border: none;"
             )
             self._pace_avg.setText(f"avg7 {daily_avg:.1f}h")
         else:
             self._pace_val.setText("no deadline")
             self._pace_val.setStyleSheet(
-                f"color: {MUTED}; font-size: 10px; font-family: Consolas, monospace;"
+                f"color: {MUTED}; font-size: 10px; font-family: {FONT_MONO};"
                 f" background: transparent; border: none;"
             )
             self._pace_avg.setText(f"avg7 {daily_avg:.1f}h")
@@ -432,7 +418,7 @@ class GoalsTab(QWidget):
 
         self._summary_lbl = QLabel("")
         self._summary_lbl.setStyleSheet(
-            f"color: {MUTED}; font-size: 9px; font-family: Consolas, monospace;"
+            f"color: {MUTED}; font-size: 9px; font-family: {FONT_MONO};"
             f" background: transparent; border: none; letter-spacing: 0.5px;"
         )
         h_lay.addWidget(self._summary_lbl)
@@ -443,23 +429,16 @@ class GoalsTab(QWidget):
         self._archived_btn.setCheckable(True)
         self._archived_btn.setChecked(False)
         self._archived_btn.setStyleSheet(
-            f"QPushButton {{ background: transparent; color: {MUTED};"
-            f" border: 1px solid {BORDER}; border-radius: 4px;"
-            f" font-size: 10px; padding: 0 12px; }}"
-            f" QPushButton:checked {{ background: {ACCENT}; color: #fff;"
+            SS.button("ghost") +
+            f" QPushButton:checked {{ background: {ACCENT}; color: {BG};"
             f" border-color: {ACCENT}; }}"
-            f" QPushButton:hover {{ border-color: {BORDER2}; color: {TEXT}; }}"
         )
         self._archived_btn.toggled.connect(self._on_toggle_archived)
         h_lay.addWidget(self._archived_btn)
 
         new_btn = QPushButton("+ New Goal")
         new_btn.setFixedHeight(28)
-        new_btn.setStyleSheet(
-            f"QPushButton {{ background: {ACCENT}; color: #fff; border: none;"
-            f" border-radius: 4px; font-size: 10px; padding: 0 14px; font-weight: 600; }}"
-            f" QPushButton:hover {{ background: {BORDER2}; }}"
-        )
+        new_btn.setStyleSheet(SS.button("primary"))
         new_btn.clicked.connect(self.open_goal_dialog)
         h_lay.addWidget(new_btn)
         root.addWidget(header)
@@ -487,11 +466,7 @@ class GoalsTab(QWidget):
         # ── scrollable card area ──────────────────────────────
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setStyleSheet(
-            f"QScrollArea {{ border: none; background: {BG}; }}"
-            f"QScrollBar:vertical {{ background: {BG2}; width: 4px; }}"
-            f"QScrollBar::handle:vertical {{ background: {BORDER}; border-radius: 2px; }}"
-        )
+        scroll.setStyleSheet(SS.scrollarea())
         self._card_container = QWidget()
         self._card_container.setStyleSheet(f"background: {BG};")
         self._card_layout = QGridLayout(self._card_container)
@@ -596,11 +571,11 @@ class GoalsTab(QWidget):
         for name in list(self._cards.keys()):
             if name not in shown_names:
                 card = self._cards.pop(name)
-                card.setParent(None)
+                card.hide()
                 card.deleteLater()
 
         if self._empty_lbl:
-            self._empty_lbl.setParent(None)
+            self._empty_lbl.hide()
             self._empty_lbl.deleteLater()
             self._empty_lbl = None
 

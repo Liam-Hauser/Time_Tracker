@@ -7,7 +7,12 @@
       "Bash(pip show:*)",
       "Bash(.venv/Scripts/pyinstaller.exe --version)",
       "Read(//c/Program Files/GitHub CLI//**)",
-      "Read(//c/Users/liamh/AppData/Local/Programs/**)"
+      "Read(//c/Users/liamh/AppData/Local/Programs/**)",
+      "Bash(curl -L -o \"Geist-Regular.ttf\" \"https://github.com/vercel/geist-font/raw/main/packages/font-files/Geist/Geist-Regular.ttf\")",
+      "Bash(curl -L -o \"Geist-Medium.ttf\" \"https://github.com/vercel/geist-font/raw/main/packages/font-files/Geist/Geist-Medium.ttf\")",
+      "Bash(curl -L -o \"Geist-SemiBold.ttf\" \"https://github.com/vercel/geist-font/raw/main/packages/font-files/Geist/Geist-SemiBold.ttf\")",
+      "Bash(curl -L -o \"GeistMono-Regular.ttf\" \"https://github.com/vercel/geist-font/raw/main/packages/font-files/GeistMono/GeistMono-Regular.ttf\")",
+      "Bash(curl -L -o \"GeistMono-Medium.ttf\" \"https://github.com/vercel/geist-font/raw/main/packages/font-files/GeistMono/GeistMono-Medium.ttf\")"
     ]
   },
   "enabledPlugins": {

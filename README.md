@@ -5,16 +5,15 @@ A PyQt5 desktop application for detailed time tracking and analytics. Data is st
 ## Features
 
 - **Task management** — Tasks organised by category with colour tags; rename, move, archive, or delete from the UI
-- **Clock in/out** — Start and stop timing sessions from the task list
-- **Live elapsed time** — Active session timer updates every second
-- **Goal tracking** — Set target hours and deadlines per task with pace calculations
-- **Tabbed analytics** — Overview, per-category, and per-task dashboards
-- **Charts** — Daily breakdown, weekday averages, weekly comparison, hourly heatmap, session histograms, cumulative pace
+- **Clock in/out** — Start and stop timing sessions from the sidebar; elapsed timer shown at the top of the left panel
+- **Goal tracking** — Set target hours and optional deadlines per task; pace calculations, on-track/behind status, auto-archive on completion
+- **Analytics dashboards** — Overview, per-category, and per-task views with mean and standard deviation stats
+- **Charts** — Daily breakdown, weekday averages, weekly comparison, hourly heatmap, session histograms, cumulative pace, category pie
 - **Insight engine** — Auto-generated insights: peak hours, best day, week-over-week delta, streak
 - **Calendar tab** — GitHub-style 52-week contribution heat map + 7-column week timeline; click to add, edit, or delete sessions
-- **Session management** — Manually add, edit, or delete sessions from the task tab or calendar
+- **Session management** — Manually add, edit, or delete sessions from the task view or calendar
 - **Dark / light theme** — Toggle in the top bar
-- **Auto-reload** — DB reloads in the background every 30 seconds
+- **Auto-reload** — DB reloads in the background every 30 seconds; active date range is preserved across reloads
 - **Update notifications** — Checks GitHub releases on startup and shows a button when a newer version is available
 
 ## Distribution
@@ -40,36 +39,45 @@ python build.py
 
 Output: `dist/TimeTracker.zip` (contains `TimeTracker.exe`) — ready to upload to a GitHub release.
 
-## Project Structure
+## Project structure
 
 ```
 time_tracker/
-├── version.py          # VERSION constant and GITHUB_REPO
-├── icon.png            # Application icon (512×512)
+├── version.py              # VERSION constant and GITHUB_REPO
+├── icon.png                # Application icon (512×512)
+├── fonts/                  # Bundled Geist and Geist Mono TTF files
 ├── core/
-│   ├── models.py       # Task, Session, GoalSpec dataclasses + TAG_PALETTES
-│   ├── db_store.py     # DBStore — thread-safe SQLite reads and writes
-│   ├── parser.py       # ParseResult container (returned by DBStore.load)
-│   └── analytics.py    # RangeStats, GoalTracker, InsightEngine, TaskSessionStats
+│   ├── models.py           # Task, Session, GoalSpec dataclasses + TAG_PALETTES
+│   ├── db_store.py         # DBStore — thread-safe SQLite reads and writes
+│   ├── parser.py           # ParseResult container (returned by DBStore.load)
+│   └── analytics.py        # RangeStats, InsightEngine, TaskSessionStats
 ├── ui/
-│   ├── main_window.py      # Top-level QMainWindow; orchestrates tabs and timers
+│   ├── main_window.py      # MainWindow — sidebar navigation, session bar, timers
 │   ├── tab_widgets.py      # CategoryTabWidget, TaskTabWidget
 │   ├── calendar_widget.py  # CalendarWidget — contribution graph + week timeline
-│   ├── widgets.py          # Reusable components (MetricCard, TaskRow, GoalRow, …)
-│   └── theme.py            # Dark/light colour tokens and spacing constants
+│   ├── goals_tab.py        # GoalsTab — goal cards grid with KPI header
+│   ├── widgets.py          # Reusable components: MetricCard, SessionTable, …
+│   ├── theme.py            # Design tokens, SS stylesheet factory, dark/light toggle
+│   └── dialogs/
+│       ├── base.py             # BaseFormDialog with shared styling
+│       ├── goal_dialogs.py     # AddGoalDialog, EditGoalDialog
+│       ├── task_dialogs.py     # NewTaskDialog, RenameTaskDialog, MoveTaskDialog
+│       ├── category_dialogs.py # NewCategoryDialog, RenameCategoryDialog
+│       └── session_dialogs.py  # AddSessionDialog, EditSessionDialog
 ├── charts/
-│   └── panels.py       # QPainter chart panels (area, bar, heatmap, pie, etc.)
+│   └── panels.py           # QPainter chart panels (area, bar, heatmap, pie, …)
 database/
-├── db.py               # SQLAlchemy engine + SessionLocal (SQLite)
-├── migrate.py          # Runs Alembic on startup; stamps existing DBs automatically
-├── models/             # ORM models: Task, HistoricClock, CurrentClock, Category, Goal
-└── alembic/            # Migration scripts
-run.py                  # Entry point
-TimeTracker.spec        # PyInstaller build spec
+├── db.py                   # SQLAlchemy engine + SessionLocal (SQLite)
+├── migrate.py              # Runs Alembic on startup; stamps existing DBs automatically
+├── models/                 # ORM models: Task, HistoricClock, CurrentClock, Category, Goal
+└── alembic/                # Migration scripts
+run.py                      # Entry point — loads fonts, creates QApplication, launches MainWindow
+build.py                    # PyInstaller build + zip script
+TimeTracker.spec            # PyInstaller build spec
 requirements.txt
 ```
 
-## Database Schema
+## Database schema
 
 | Table | Key columns |
 |---|---|
@@ -77,4 +85,4 @@ requirements.txt
 | `historic_clocks` | `id`, `tasks_id`, `start_time`, `end_time`, `total_sec` |
 | `current_clocks` | `id`, `task_id`, `start_time` — one row = active session |
 | `categories` | `id`, `name`, `colour_tag` |
-| `goals` | `id`, `tasks_id`, `name`, `target_hours`, `by_date` |
+| `goals` | `id`, `tasks_id`, `target_hours`, `by_date`, `completed_on`, `archived` |

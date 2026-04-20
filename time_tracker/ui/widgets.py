@@ -17,10 +17,16 @@ from PyQt5.QtCore import QDateTime
 
 from .theme import (
     BG, BG2, BG3, BG4, BORDER, BORDER2,
-    TEXT, MUTED, FAINT, ACCENT, ACCENT_DIM,
+    TEXT, DIM, MUTED, FAINT, ACCENT, ACCENT_DIM,
     SUCCESS, SUCCESS_DIM, WARNING, WARNING_DIM, DANGER, DANGER_DIM,
-    PAD_XS, PAD_SM, PAD_MD, PAD_LG,
+    FONT_UI, FONT_MONO, RADIUS, RADIUS_LG,
+    PAD, PAD_MD, PAD_LG,
+    PAD_XS, PAD_SM,  # backwards-compat
+    SS,
 )
+
+# Re-export dialog classes so existing imports from widgets still work
+from .dialogs.session_dialogs import EditSessionDialog, AddSessionDialog  # noqa: F401
 
 
 # ──────────────────────────────────────────────────────────
@@ -35,24 +41,36 @@ def _dim_effect(parent: QWidget, opacity: float = 0.4) -> QGraphicsOpacityEffect
 def h_line() -> QFrame:
     f = QFrame()
     f.setFrameShape(QFrame.HLine)
-    f.setStyleSheet(f"color: {BORDER}; max-height: 1px; background: {BORDER};")
+    f.setFixedHeight(1)
+    f.setStyleSheet(f"background: {BORDER}; border: none;")
     return f
 
 
 def v_line() -> QFrame:
     f = QFrame()
     f.setFrameShape(QFrame.VLine)
-    f.setStyleSheet(f"color: {BORDER}; max-width: 1px; background: {BORDER};")
+    f.setFixedWidth(1)
+    f.setStyleSheet(f"background: {BORDER}; border: none;")
     return f
 
 
 def label(text: str, colour: str = TEXT, bold: bool = False,
-          size: int = 11) -> QLabel:
+          size: int = 11, mono: bool = False) -> QLabel:
     lbl = QLabel(text)
     w   = "600" if bold else "400"
+    ff  = FONT_MONO if mono else FONT_UI
     lbl.setStyleSheet(
         f"color: {colour}; font-size: {size}px; font-weight: {w};"
-        f" background: transparent; border: none;"
+        f" font-family: {ff}; background: transparent; border: none;"
+    )
+    return lbl
+
+
+def section_label(text: str) -> QLabel:
+    lbl = QLabel(text.upper())
+    lbl.setStyleSheet(
+        f"color: {MUTED}; font-size: 9px; font-family: {FONT_MONO};"
+        f" letter-spacing: 1.2px; font-weight: 600; background: transparent;"
     )
     return lbl
 
@@ -60,10 +78,59 @@ def label(text: str, colour: str = TEXT, bold: bool = False,
 def card_frame(parent=None) -> QFrame:
     f = QFrame(parent)
     f.setStyleSheet(
-        f"QFrame {{ background: {BG2}; border-radius: 8px;"
+        f"QFrame {{ background: {BG2}; border-radius: {RADIUS_LG}px;"
         f" border: 1px solid {BORDER}; }}"
     )
     return f
+
+
+# ──────────────────────────────────────────────────────────
+# Panel widget  (titled container for charts / content)
+# ──────────────────────────────────────────────────────────
+
+class PanelWidget(QFrame):
+    """Card-style container with a thin header bar and content body."""
+
+    def __init__(self, title: str = "", parent=None):
+        super().__init__(parent)
+        self.setStyleSheet(
+            f"PanelWidget {{ background: {BG2}; border-radius: {RADIUS_LG}px;"
+            f" border: 1px solid {BORDER}; }}"
+        )
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        if title:
+            hdr = QFrame()
+            hdr.setFixedHeight(26)
+            hdr.setStyleSheet(
+                f"QFrame {{ background: {BG3};"
+                f" border-top-left-radius: {RADIUS_LG}px;"
+                f" border-top-right-radius: {RADIUS_LG}px;"
+                f" border: none; border-bottom: 1px solid {BORDER}; }}"
+            )
+            hl = QHBoxLayout(hdr)
+            hl.setContentsMargins(PAD_MD, 0, PAD_MD, 0)
+            hl.setSpacing(0)
+            lbl = QLabel(title.upper())
+            lbl.setStyleSheet(
+                f"color: {MUTED}; font-size: 9px; font-family: {FONT_MONO};"
+                f" letter-spacing: 1.0px; font-weight: 600; background: transparent;"
+            )
+            hl.addWidget(lbl)
+            hl.addStretch()
+            outer.addWidget(hdr)
+
+        self._body = QVBoxLayout()
+        self._body.setContentsMargins(0, 0, 0, 0)
+        self._body.setSpacing(0)
+        outer.addLayout(self._body)
+
+    def add_widget(self, w: QWidget) -> None:
+        self._body.addWidget(w)
 
 
 # ──────────────────────────────────────────────────────────
@@ -71,20 +138,40 @@ def card_frame(parent=None) -> QFrame:
 # ──────────────────────────────────────────────────────────
 
 class MetricCard(QFrame):
-    def __init__(self, title: str, parent=None):
+    """KPI stat cell matching Quant Workstation StatCell design."""
+
+    def __init__(self, title: str, big: bool = False,
+                 right_border: bool = True, parent=None):
         super().__init__(parent)
+        self._big = big
+        val_size = 22 if big else 17
         self.setStyleSheet(
-            f"QFrame {{ background: {BG2}; border-radius: 8px;"
-            f" border: 1px solid {BORDER}; }}"
+            f"QFrame {{ background: {BG2};"
+            f" border: none;"
+            + (f" border-right: 1px solid {BORDER};" if right_border else "")
+            + f" }}"
         )
-        self.setMinimumHeight(80)
+        self.setMinimumWidth(100)
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(14, 12, 14, 12)
+        lay.setContentsMargins(PAD_MD, PAD, PAD_MD, PAD)
         lay.setSpacing(2)
 
-        self._title = label(title, MUTED, size=10)
-        self._value = label("—", TEXT, bold=True, size=24)
-        self._sub   = label("", FAINT, size=10)
+        self._title = QLabel(title.upper())
+        self._title.setStyleSheet(
+            f"color: {MUTED}; font-size: 9px; font-family: {FONT_MONO};"
+            f" letter-spacing: 1.1px; font-weight: 600; background: transparent;"
+        )
+        self._value = QLabel("—")
+        self._value.setStyleSheet(
+            f"color: {TEXT}; font-size: {val_size}px; font-weight: 600;"
+            f" font-family: {FONT_MONO}; letter-spacing: -0.2px;"
+            f" background: transparent;"
+        )
+        self._sub = QLabel("")
+        self._sub.setStyleSheet(
+            f"color: {DIM}; font-size: 10px; font-family: {FONT_MONO};"
+            f" background: transparent;"
+        )
 
         lay.addWidget(self._title)
         lay.addWidget(self._value)
@@ -94,10 +181,12 @@ class MetricCard(QFrame):
     def update_value(self, value: str, sub: str = "",
                      colour: str = "") -> None:
         self._value.setText(value)
-        _col = colour if colour else TEXT   # read TEXT from module scope at call time
+        val_size = 22 if self._big else 17
+        _col = colour if colour else TEXT
         self._value.setStyleSheet(
-            f"color: {_col}; font-size: 24px; font-weight: 600;"
-            f" background: transparent; border: none;"
+            f"color: {_col}; font-size: {val_size}px; font-weight: 600;"
+            f" font-family: {FONT_MONO}; letter-spacing: -0.2px;"
+            f" background: transparent;"
         )
         self._sub.setText(sub)
 
@@ -110,7 +199,6 @@ class InsightCard(QFrame):
     def __init__(self, icon: str, label_txt: str, value: str,
                  sub: str, sentiment: str, parent=None):
         super().__init__(parent)
-        # Build the colour map at init time so it reads current theme vars
         _colors = {
             "positive": (SUCCESS, SUCCESS_DIM),
             "warning":  (WARNING, WARNING_DIM),
@@ -119,15 +207,15 @@ class InsightCard(QFrame):
         }
         fg, bg = _colors.get(sentiment, (MUTED, BG3))
         self.setStyleSheet(
-            f"QFrame {{ background: {bg}; border-radius: 8px;"
+            f"QFrame {{ background: {bg}; border-radius: {RADIUS_LG}px;"
             f" border: 1px solid {BORDER}; }}"
         )
         self.setFixedHeight(72)
         self.setMinimumWidth(150)
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(12, 8, 12, 8)
-        lay.setSpacing(1)
+        lay.setContentsMargins(PAD_MD, PAD, PAD_MD, PAD)
+        lay.setSpacing(2)
 
         top = QHBoxLayout()
         top.setSpacing(5)
@@ -136,9 +224,9 @@ class InsightCard(QFrame):
         top.addStretch()
         lay.addLayout(top)
 
-        lay.addWidget(label(value, fg, bold=True, size=16))
+        lay.addWidget(label(value, fg, bold=True, size=15, mono=True))
         if sub:
-            lay.addWidget(label(sub, MUTED, size=9))
+            lay.addWidget(label(sub, MUTED, size=9, mono=True))
 
 
 class InsightStrip(QWidget):
@@ -153,8 +241,9 @@ class InsightStrip(QWidget):
         # Clear existing cards
         while self._lay.count() > 1:
             item = self._lay.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+            if w := item.widget():
+                w.hide()
+                w.deleteLater()
 
         for ins in insights:
             card = InsightCard(ins.icon, ins.label, ins.value,
@@ -169,6 +258,8 @@ class InsightStrip(QWidget):
 # ──────────────────────────────────────────────────────────
 
 class ChartPanel(QWidget):
+    """Titled container for QPainter chart widgets. Uses PanelWidget styling."""
+
     def __init__(self, title: str, parent=None):
         super().__init__(parent)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -177,23 +268,30 @@ class ChartPanel(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        header = QFrame()
-        header.setFixedHeight(30)
-        header.setStyleSheet(
+        hdr = QFrame()
+        hdr.setFixedHeight(26)
+        hdr.setStyleSheet(
             f"QFrame {{ background: {BG3};"
-            f" border-top-left-radius: 8px; border-top-right-radius: 8px;"
+            f" border-top-left-radius: {RADIUS_LG}px;"
+            f" border-top-right-radius: {RADIUS_LG}px;"
             f" border: 1px solid {BORDER}; border-bottom: none; }}"
         )
-        hl = QHBoxLayout(header)
-        hl.setContentsMargins(12, 0, 12, 0)
-        hl.addWidget(label(title, MUTED, size=10))
+        hl = QHBoxLayout(hdr)
+        hl.setContentsMargins(PAD_MD, 0, PAD_MD, 0)
+        ttl = QLabel(title.upper())
+        ttl.setStyleSheet(
+            f"color: {MUTED}; font-size: 9px; font-family: {FONT_MONO};"
+            f" letter-spacing: 1.0px; font-weight: 600; background: transparent;"
+        )
+        hl.addWidget(ttl)
         hl.addStretch()
-        outer.addWidget(header)
+        outer.addWidget(hdr)
 
         self._content = QFrame()
         self._content.setStyleSheet(
             f"QFrame {{ background: {BG2};"
-            f" border-bottom-left-radius: 8px; border-bottom-right-radius: 8px;"
+            f" border-bottom-left-radius: {RADIUS_LG}px;"
+            f" border-bottom-right-radius: {RADIUS_LG}px;"
             f" border: 1px solid {BORDER}; border-top: none; }}"
         )
         cl = QVBoxLayout(self._content)
@@ -220,14 +318,14 @@ class CollapsibleSection(QWidget):
 
         header = QFrame()
         header.setCursor(Qt.PointingHandCursor)
-        header.setFixedHeight(32)
+        header.setFixedHeight(30)
         header.setStyleSheet(
-            f"QFrame {{ background: {BG3}; border-radius: 6px;"
+            f"QFrame {{ background: {BG3}; border-radius: {RADIUS}px;"
             f" border: 1px solid {BORDER}; }}"
         )
         hl = QHBoxLayout(header)
-        hl.setContentsMargins(10, 0, 10, 0)
-        hl.setSpacing(8)
+        hl.setContentsMargins(PAD, 0, PAD, 0)
+        hl.setSpacing(PAD)
 
         self._arrow = label("▾", MUTED, size=10)
         self._arrow.setFixedWidth(12)
@@ -239,11 +337,11 @@ class CollapsibleSection(QWidget):
 
         self._content = QFrame()
         self._content.setStyleSheet(
-            f"QFrame {{ background: {BG2}; border-radius: 6px;"
+            f"QFrame {{ background: {BG2}; border-radius: {RADIUS}px;"
             f" border: 1px solid {BORDER}; }}"
         )
         cl = QVBoxLayout(self._content)
-        cl.setContentsMargins(PAD_SM, PAD_SM, PAD_SM, PAD_SM)
+        cl.setContentsMargins(PAD, PAD, PAD, PAD)
         cl.setSpacing(4)
         outer.addWidget(self._content)
         self._cl = cl
@@ -370,14 +468,14 @@ class PresetBar(QWidget):
         super().__init__(parent)
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(PAD_XS)
+        lay.setSpacing(4)
         for display, key in zip(self.PRESETS, self.PRESET_KEYS):
             btn = QPushButton(display)
-            btn.setFixedHeight(24)
+            btn.setFixedHeight(22)
             btn.setStyleSheet(
                 f"QPushButton {{ background: transparent; color: {MUTED};"
-                f" border: 1px solid {BORDER}; border-radius: 5px;"
-                f" font-size: 10px; padding: 0 8px; }}"
+                f" border: 1px solid {BORDER}; border-radius: {RADIUS}px;"
+                f" font-size: 10px; font-family: {FONT_UI}; padding: 0 7px; }}"
                 f" QPushButton:hover {{ color: {TEXT}; border-color: {BORDER2};"
                 f" background: {BG3}; }}"
             )
@@ -447,64 +545,65 @@ class TaskRow(QWidget):
         self._clocked_in = clocked_in
         self._archived   = archived
 
-        self.setStyleSheet(
-            f"TaskRow {{ border-bottom: 1px solid {BORDER};"
-            f" background: transparent; }}"
-        )
         if archived:
             self.setGraphicsEffect(_dim_effect(self, opacity=0.45))
 
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(4, 8, 4, 8)
-        lay.setSpacing(8)
+        self._update_row_style()
 
-        # Category colour accent stripe (thin left border)
-        if category_colour:
-            stripe = QFrame()
-            stripe.setFixedWidth(3)
-            stripe.setFixedHeight(28)
-            stripe.setStyleSheet(
-                f"background: {category_colour}; border-radius: 1px;"
-                f" border: none;"
-            )
-            lay.addWidget(stripe)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        # Active indicator bar (2px left border shown via wrapper)
+        self._indicator = QFrame()
+        self._indicator.setFixedWidth(2)
+        self._indicator.setStyleSheet(
+            f"background: {ACCENT if clocked_in else 'transparent'}; border: none;"
+        )
+
+        row_w = QWidget()
+        row_w.setStyleSheet("background: transparent;")
+        lay = QHBoxLayout(row_w)
+        lay.setContentsMargins(14, 5, PAD_MD, 5)
+        lay.setSpacing(PAD)
 
         # Dot
         dot = QLabel("●")
         dot.setStyleSheet(
-            f"color: {colour}; font-size: 11px;"
-            f" background: transparent; border: none;"
+            f"color: {colour}; font-size: 8px; background: transparent; border: none;"
         )
-        dot.setFixedWidth(14)
+        dot.setFixedWidth(10)
         lay.addWidget(dot)
 
-        # Name
-        name_lbl = QLabel(task_name)
-        name_lbl.setStyleSheet(
-            f"color: {TEXT}; font-size: 11px;"
+        # Name + sub-row (name + hours)
+        name_col = QVBoxLayout()
+        name_col.setContentsMargins(0, 0, 0, 0)
+        name_col.setSpacing(1)
+        self._name_lbl = QLabel(task_name)
+        self._name_lbl.setStyleSheet(
+            f"color: {TEXT}; font-size: 11px; font-family: {FONT_UI};"
             f" background: transparent; border: none;"
         )
-        name_lbl.setMinimumWidth(120)
-        lay.addWidget(name_lbl)
-
-        # Bar
-        self._bar = _MiniBar(total_sec, max_sec, colour)
-        lay.addWidget(self._bar, stretch=1)
-
-        # Duration
         from ..core.models import fmt_dur
-        self._dur_lbl = QLabel(fmt_dur(total_sec, short=True))
-        self._dur_lbl.setStyleSheet(
-            f"color: {TEXT}; font-size: 11px; font-weight: 600;"
-            f" min-width: 56px; background: transparent; border: none;"
+        self._hours_lbl = QLabel(fmt_dur(total_sec, short=True))
+        self._hours_lbl.setStyleSheet(
+            f"color: {MUTED}; font-size: 9px; font-family: {FONT_MONO};"
+            f" background: transparent; border: none;"
         )
-        self._dur_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        lay.addWidget(self._dur_lbl)
+        name_col.addWidget(self._name_lbl)
+        name_col.addWidget(self._hours_lbl)
+        lay.addLayout(name_col, stretch=1)
 
-        # Elapsed (clocked in)
+        # Progress bar (40×3px)
+        self._bar = _MiniBar(total_sec, max_sec, colour)
+        self._bar.setFixedWidth(40)
+        self._bar.setFixedHeight(3)
+        lay.addWidget(self._bar)
+
+        # Elapsed (shown when clocked in — subtle, monospace)
         self._elapsed_lbl = QLabel()
         self._elapsed_lbl.setStyleSheet(
-            f"color: {SUCCESS}; font-size: 10px; min-width: 50px;"
+            f"color: {ACCENT}; font-size: 9px; font-family: {FONT_MONO};"
             f" background: transparent; border: none;"
         )
         self._elapsed_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -513,29 +612,45 @@ class TaskRow(QWidget):
             self._elapsed_lbl.setText(fmt_dur(elapsed_sec, short=True))
         lay.addWidget(self._elapsed_lbl)
 
-        # Clock button
+        # Clock button (compact ghost/danger style)
         self._btn = QPushButton()
-        self._btn.setFixedSize(72, 24)
+        self._btn.setFixedSize(68, 22)
         self._update_btn()
         self._btn.clicked.connect(self._on_clock)
         lay.addWidget(self._btn)
 
+        # Assemble with indicator
+        hbox = QHBoxLayout()
+        hbox.setContentsMargins(0, 0, 0, 0)
+        hbox.setSpacing(0)
+        hbox.addWidget(self._indicator)
+        hbox.addWidget(row_w, stretch=1)
+        outer.addLayout(hbox)
+
+        sep = QFrame()
+        sep.setFixedHeight(1)
+        sep.setStyleSheet(f"background: {BORDER}; border: none;")
+        outer.addWidget(sep)
+
+    def _update_row_style(self) -> None:
+        self.setStyleSheet("TaskRow { background: transparent; }")
+
     def _update_btn(self) -> None:
         if self._clocked_in:
-            self._btn.setText("Clock Out")
+            self._btn.setText("Stop")
             self._btn.setStyleSheet(
-                f"QPushButton {{ background: {DANGER}; color: white;"
-                f" border-radius: 5px; font-size: 10px; font-weight: 600;"
-                f" border: none; }}"
-                f" QPushButton:hover {{ background: #c0392b; }}"
+                f"QPushButton {{ background: transparent; color: {DANGER};"
+                f" border: 1px solid {DANGER}; border-radius: {RADIUS}px;"
+                f" font-size: 10px; font-family: {FONT_UI}; }}"
+                f" QPushButton:hover {{ background: {DANGER_DIM}; }}"
             )
         else:
             self._btn.setText("Clock In")
             self._btn.setStyleSheet(
-                f"QPushButton {{ background: {SUCCESS}; color: white;"
-                f" border-radius: 5px; font-size: 10px; font-weight: 600;"
-                f" border: none; }}"
-                f" QPushButton:hover {{ background: #2aab6f; }}"
+                f"QPushButton {{ background: {ACCENT}; color: {BG};"
+                f" border: 1px solid {ACCENT}; border-radius: {RADIUS}px;"
+                f" font-size: 10px; font-family: {FONT_UI}; }}"
+                f" QPushButton:hover {{ opacity: 0.85; }}"
             )
 
     def _on_clock(self) -> None:
@@ -552,6 +667,9 @@ class TaskRow(QWidget):
     def set_clocked_in(self, state: bool) -> None:
         self._clocked_in = state
         self._elapsed_lbl.setVisible(state)
+        self._indicator.setStyleSheet(
+            f"background: {ACCENT if state else 'transparent'}; border: none;"
+        )
         self._update_btn()
 
     def mousePressEvent(self, e) -> None:
@@ -565,22 +683,16 @@ class TaskRow(QWidget):
         menu.setStyleSheet(
             f"QMenu {{"
             f"  background: {BG3}; color: {TEXT};"
-            f"  border: 1px solid {BORDER2}; border-radius: 6px;"
-            f"  padding: 4px 0px;"
+            f"  border: 1px solid {BORDER2}; border-radius: {RADIUS}px;"
+            f"  padding: 4px 0; font-family: {FONT_UI};"
             f"}}"
             f"QMenu::item {{"
-            f"  padding: 5px 14px; font-size: 10px;"
-            f"  border-radius: 3px; margin: 0px 4px;"
+            f"  padding: 5px 14px; font-size: 11px;"
+            f"  border-radius: {RADIUS}px; margin: 0 4px;"
             f"}}"
-            f"QMenu::item:selected {{"
-            f"  background: {BG4}; color: {TEXT};"
-            f"}}"
-            f"QMenu::item:disabled {{"
-            f"  color: {FAINT};"
-            f"}}"
-            f"QMenu::separator {{"
-            f"  height: 1px; background: {BORDER}; margin: 3px 8px;"
-            f"}}"
+            f"QMenu::item:selected {{ background: {BG4}; color: {TEXT}; }}"
+            f"QMenu::item:disabled {{ color: {FAINT}; }}"
+            f"QMenu::separator {{ height: 1px; background: {BORDER}; margin: 3px 8px; }}"
         )
         menu.addAction("Rename…").triggered.connect(
             lambda: self.rename_requested.emit(self._name))
@@ -818,25 +930,25 @@ class SessionTable(QWidget):
 
         # Header row
         hdr = QFrame()
-        hdr.setFixedHeight(28)
+        hdr.setFixedHeight(26)
         hdr.setStyleSheet(
             f"QFrame {{ background: {BG3}; border-bottom: 1px solid {BORDER}; }}"
         )
         hl = QHBoxLayout(hdr)
-        hl.setContentsMargins(8, 0, 8, 0)
+        hl.setContentsMargins(PAD, 0, PAD, 0)
         hl.setSpacing(0)
         for txt, w in [("Date", 108), ("Start", 72), ("End", 72)]:
-            lbl = QLabel(txt)
+            lbl = QLabel(txt.upper())
             lbl.setFixedWidth(w)
             lbl.setStyleSheet(
-                f"color: {MUTED}; font-size: 10px;"
-                f" background: transparent; border: none;"
+                f"color: {MUTED}; font-size: 9px; font-family: {FONT_MONO};"
+                f" letter-spacing: 0.5px; background: transparent; border: none;"
             )
             hl.addWidget(lbl)
-        dur_hdr = QLabel("Duration")
+        dur_hdr = QLabel("DURATION")
         dur_hdr.setStyleSheet(
-            f"color: {MUTED}; font-size: 10px;"
-            f" background: transparent; border: none;"
+            f"color: {MUTED}; font-size: 9px; font-family: {FONT_MONO};"
+            f" letter-spacing: 0.5px; background: transparent; border: none;"
         )
         hl.addWidget(dur_hdr, stretch=1)
         root.addWidget(hdr)
@@ -844,12 +956,7 @@ class SessionTable(QWidget):
         # Scrollable rows
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setStyleSheet(
-            f"QScrollArea {{ border: none; background: {BG2}; }}"
-            f"QScrollBar:vertical {{ background: {BG2}; width: 4px; }}"
-            f"QScrollBar::handle:vertical {{ background: {BORDER}; border-radius: 2px; }}"
-            f"QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}"
-        )
+        scroll.setStyleSheet(SS.scrollarea() + f" QScrollArea {{ background: {BG2}; }}")
         self._container = QWidget()
         self._container.setStyleSheet(f"background: {BG2};")
         self._list_lay = QVBoxLayout(self._container)
@@ -864,8 +971,9 @@ class SessionTable(QWidget):
         # Remove all existing rows (keep trailing stretch)
         while self._list_lay.count() > 1:
             item = self._list_lay.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+            if w := item.widget():
+                w.hide()
+                w.deleteLater()
 
         sessions = sorted(
             task.sessions_in_range(start, end),
@@ -883,133 +991,6 @@ class SessionTable(QWidget):
             row.edit_requested.connect(self.edit_requested)
             row.delete_requested.connect(self.delete_requested)
             self._list_lay.insertWidget(self._list_lay.count() - 1, row)
-
-
-# ──────────────────────────────────────────────────────────
-# Session edit / add dialogs
-# ──────────────────────────────────────────────────────────
-
-_DT_CSS = (
-    f"QDateTimeEdit {{ background: {BG3}; color: {TEXT};"
-    f" border: 1px solid {BORDER}; border-radius: 5px;"
-    f" padding: 4px 8px; font-size: 11px; }}"
-    f" QDateTimeEdit:focus {{ border-color: {ACCENT}; }}"
-)
-
-
-class EditSessionDialog(QDialog):
-    """Edit the start and end times of an existing session."""
-
-    def __init__(self, start, end, parent=None):
-        from datetime import datetime as _dt
-        super().__init__(parent)
-        self.setWindowTitle("Edit Session")
-        self.setFixedWidth(360)
-        self.setStyleSheet(
-            f"background: {BG}; color: {TEXT};"
-            f" QLabel {{ background: transparent; }}"
-        )
-        root = QVBoxLayout(self)
-        root.setSpacing(PAD_SM)
-
-        for lbl_text, attr, dt_val in [
-            ("Start", "_start_edit", start),
-            ("End",   "_end_edit",   end),
-        ]:
-            root.addWidget(label(lbl_text, MUTED, size=10))
-            edit = QDateTimeEdit()
-            edit.setDisplayFormat("yyyy-MM-dd  HH:mm:ss")
-            edit.setCalendarPopup(True)
-            edit.setStyleSheet(_DT_CSS)
-            if dt_val:
-                from PyQt5.QtCore import QDateTime as _QDT, QDate as _QDate, QTime as _QTime
-                edit.setDateTime(_QDT(
-                    _QDate(dt_val.year, dt_val.month, dt_val.day),
-                    _QTime(dt_val.hour, dt_val.minute, dt_val.second),
-                ))
-            setattr(self, attr, edit)
-            root.addWidget(edit)
-
-        root.addStretch()
-        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        btns.setStyleSheet(f"color: {TEXT};")
-        btns.accepted.connect(self._on_accept)
-        btns.rejected.connect(self.reject)
-        root.addWidget(btns)
-
-    def _on_accept(self) -> None:
-        if self._start_edit.dateTime() >= self._end_edit.dateTime():
-            self._end_edit.setStyleSheet(
-                _DT_CSS + f" QDateTimeEdit {{ border-color: {DANGER}; }}")
-            return
-        self.accept()
-
-    def values(self):
-        from datetime import datetime as _dt
-        def _to_dt(qdt):
-            d = qdt.date()
-            t = qdt.time()
-            return _dt(d.year(), d.month(), d.day(),
-                       t.hour(), t.minute(), t.second())
-        return _to_dt(self._start_edit.dateTime()), \
-               _to_dt(self._end_edit.dateTime())
-
-
-class AddSessionDialog(QDialog):
-    """Log a manual session retroactively."""
-
-    def __init__(self, parent=None):
-        from datetime import datetime as _dt, timedelta as _td
-        super().__init__(parent)
-        self.setWindowTitle("Add Manual Session")
-        self.setFixedWidth(360)
-        self.setStyleSheet(
-            f"background: {BG}; color: {TEXT};"
-            f" QLabel {{ background: transparent; }}"
-        )
-        root = QVBoxLayout(self)
-        root.setSpacing(PAD_SM)
-
-        now = _dt.now().replace(second=0, microsecond=0)
-        defaults = [("Start", "_start_edit", now - _td(hours=1)),
-                    ("End",   "_end_edit",   now)]
-        for lbl_text, attr, dt_val in defaults:
-            root.addWidget(label(lbl_text, MUTED, size=10))
-            edit = QDateTimeEdit()
-            edit.setDisplayFormat("yyyy-MM-dd  HH:mm:ss")
-            edit.setCalendarPopup(True)
-            edit.setStyleSheet(_DT_CSS)
-            from PyQt5.QtCore import QDateTime as _QDT, QDate as _QDate, QTime as _QTime
-            edit.setDateTime(_QDT(
-                _QDate(dt_val.year, dt_val.month, dt_val.day),
-                _QTime(dt_val.hour, dt_val.minute, dt_val.second),
-            ))
-            setattr(self, attr, edit)
-            root.addWidget(edit)
-
-        root.addStretch()
-        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        btns.setStyleSheet(f"color: {TEXT};")
-        btns.accepted.connect(self._on_accept)
-        btns.rejected.connect(self.reject)
-        root.addWidget(btns)
-
-    def _on_accept(self) -> None:
-        if self._start_edit.dateTime() >= self._end_edit.dateTime():
-            self._end_edit.setStyleSheet(
-                _DT_CSS + f" QDateTimeEdit {{ border-color: {DANGER}; }}")
-            return
-        self.accept()
-
-    def values(self):
-        from datetime import datetime as _dt
-        def _to_dt(qdt):
-            d = qdt.date()
-            t = qdt.time()
-            return _dt(d.year(), d.month(), d.day(),
-                       t.hour(), t.minute(), t.second())
-        return _to_dt(self._start_edit.dateTime()), \
-               _to_dt(self._end_edit.dateTime())
 
 
 # ──────────────────────────────────────────────────────────

@@ -24,9 +24,10 @@ from .widgets import (
     label, h_line,
 )
 from .theme import (
-    BG, BG2, BG3, BORDER, BORDER2, TEXT, MUTED, FAINT,
-    PAD_SM, PAD_MD, PAD_LG,
+    BG, BG2, BG3, BORDER, BORDER2, TEXT, DIM, MUTED, FAINT,
+    PAD, PAD_MD, PAD_LG, RADIUS, RADIUS_LG,
     ACCENT, SUCCESS, WARNING, DANGER,
+    FONT_UI, FONT_MONO, SS,
 )
 
 
@@ -77,7 +78,7 @@ class _GoalProgressBar(QWidget):
         p.setPen(QPen(QColor(BORDER), 1))
         p.drawRect(0, 0, w - 1, h - 1)
         p.setPen(QColor(TEXT))
-        f = QFont("Consolas", 8)
+        f = QFont(FONT_MONO, 8)
         f.setWeight(QFont.DemiBold)
         p.setFont(f)
         from PyQt5.QtCore import Qt as _Qt
@@ -94,7 +95,7 @@ class GoalInfoPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setStyleSheet(
-            f"background: {BG2}; border: 1px solid {BORDER}; border-radius: 6px;"
+            f"background: {BG2}; border: 1px solid {BORDER}; border-radius: {RADIUS_LG}px;"
         )
 
         lay = QVBoxLayout(self)
@@ -121,23 +122,13 @@ class GoalInfoPanel(QWidget):
 
         edit_btn = QPushButton("Edit")
         edit_btn.setFixedHeight(22)
-        edit_btn.setStyleSheet(
-            f"QPushButton {{ background: transparent; color: {MUTED};"
-            f" border: 1px solid {BORDER}; border-radius: 3px;"
-            f" font-size: 9px; padding: 0 8px; }}"
-            f" QPushButton:hover {{ color: {TEXT}; border-color: {BORDER2}; }}"
-        )
+        edit_btn.setStyleSheet(SS.button("ghost"))
         edit_btn.clicked.connect(self.edit_requested)
         hdr.addWidget(edit_btn)
 
         rm_btn = QPushButton("Remove")
         rm_btn.setFixedHeight(22)
-        rm_btn.setStyleSheet(
-            f"QPushButton {{ background: transparent; color: {DANGER};"
-            f" border: 1px solid {DANGER}; border-radius: 3px;"
-            f" font-size: 9px; padding: 0 8px; }}"
-            f" QPushButton:hover {{ background: {DANGER}; color: #fff; }}"
-        )
+        rm_btn.setStyleSheet(SS.button("danger"))
         rm_btn.clicked.connect(self.remove_requested)
         hdr.addWidget(rm_btn)
         lay.addLayout(hdr)
@@ -172,7 +163,7 @@ class GoalInfoPanel(QWidget):
         )
         v = label("—", TEXT, size=10)
         v.setStyleSheet(
-            f"color: {TEXT}; font-size: 10px; font-family: Consolas, monospace;"
+            f"color: {TEXT}; font-size: 10px; font-family: {FONT_MONO};"
             f" background: transparent; border: none;"
         )
         cl.addWidget(t)
@@ -233,19 +224,19 @@ class GoalInfoPanel(QWidget):
             pace_color = SUCCESS if avg7 >= req_hpd else WARNING
             self._lbl_pace.setText(f"{req_hpd:.2f} h/day")
             self._lbl_pace.setStyleSheet(
-                f"color: {pace_color}; font-size: 10px; font-family: Consolas, monospace;"
+                f"color: {pace_color}; font-size: 10px; font-family: {FONT_MONO};"
                 f" background: transparent; border: none;"
             )
         elif pct >= 1.0:
             self._lbl_pace.setText("complete")
             self._lbl_pace.setStyleSheet(
-                f"color: {SUCCESS}; font-size: 10px; font-family: Consolas, monospace;"
+                f"color: {SUCCESS}; font-size: 10px; font-family: {FONT_MONO};"
                 f" background: transparent; border: none;"
             )
         else:
             self._lbl_pace.setText("—")
             self._lbl_pace.setStyleSheet(
-                f"color: {MUTED}; font-size: 10px; font-family: Consolas, monospace;"
+                f"color: {MUTED}; font-size: 10px; font-family: {FONT_MONO};"
                 f" background: transparent; border: none;"
             )
 
@@ -267,21 +258,16 @@ class CategoryTabWidget(QWidget):
     def _build(self) -> None:
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setStyleSheet(
-            f"QScrollArea {{ border: none; background: {BG}; }}"
-            f"QScrollBar:vertical {{ background: {BG2}; width: 4px; }}"
-            f"QScrollBar::handle:vertical {{ background: {BORDER}; border-radius: 2px; }}"
-            f"QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}"
-        )
+        scroll.setStyleSheet(SS.scrollarea())
         inner = QWidget()
         inner.setStyleSheet(f"background: {BG};")
         lay = QVBoxLayout(inner)
-        lay.setContentsMargins(PAD_SM, PAD_MD, PAD_MD, PAD_MD)
-        lay.setSpacing(PAD_SM)
+        lay.setContentsMargins(PAD, PAD_MD, PAD_MD, PAD_MD)
+        lay.setSpacing(PAD)
 
         # Metric cards (4 across)
         mc_row = QHBoxLayout()
-        mc_row.setSpacing(PAD_SM)
+        mc_row.setSpacing(PAD)
         self._mc_today    = MetricCard("Today")
         self._mc_total    = MetricCard("Total hours")
         self._mc_sessions = MetricCard("Sessions")
@@ -298,7 +284,7 @@ class CategoryTabWidget(QWidget):
         vsplit = QSplitter(Qt.Vertical)
         vsplit.setChildrenCollapsible(False)
         vsplit.setStyleSheet(
-            f"QSplitter::handle:vertical {{ background: {BORDER}; height: 4px; margin: 1px 0; }}"
+            f"QSplitter::handle:vertical {{ background: {BORDER}; height: 3px; margin: 1px 0; }}"
             f"QSplitter::handle:vertical:hover {{ background: {ACCENT}; }}"
         )
 
@@ -309,7 +295,7 @@ class CategoryTabWidget(QWidget):
         row2_w.setStyleSheet(f"background: {BG};")
         row2 = QHBoxLayout(row2_w)
         row2.setContentsMargins(0, 0, 0, 0)
-        row2.setSpacing(PAD_SM)
+        row2.setSpacing(PAD)
         self._wd_chart = WeekdayBarChart()
         row2.addWidget(make_chart_panel("Avg by weekday", self._wd_chart))
         self._wc_chart = WeeklyCompChart()
@@ -336,29 +322,33 @@ class CategoryTabWidget(QWidget):
             return
         stats = RangeStats(cat_tasks, start, end)
 
-        # Today card
+        import statistics as _stats
+        from datetime import date as _date
+        today = _date.today()
+
         today_sec = _today_seconds(cat_tasks)
+        today_sess = sum(1 for t in cat_tasks for s in t.sessions if s.start.date() == today)
         self._mc_today.update_value(
             fmt_dur(today_sec, short=True),
-            f"{today_sec / 3600:.1f}h so far",
+            f"{today_sess} session{'s' if today_sess != 1 else ''} today",
         )
 
-        # Other metric cards
         self._mc_total.update_value(
             fmt_dur(stats.grand_total_seconds, short=True),
             f"{stats.grand_total_seconds / 3600:.1f}h total",
         )
-        n_sess = sum(
-            len(t.sessions_in_range(start, end)) for t in cat_tasks
-        )
-        self._mc_sessions.update_value(str(n_sess), f"over {stats.n_days} days")
+        n_sess = sum(len(t.sessions_in_range(start, end)) for t in cat_tasks)
+        spd = n_sess / max(1, stats.n_days)
+        self._mc_sessions.update_value(str(n_sess), f"μ {spd:.1f}/day  ·  {stats.n_days}d")
 
         closed = [s for t in cat_tasks
                   for s in t.sessions_in_range(start, end)
                   if not s.is_open]
         if closed:
-            avg = sum(s.duration_seconds for s in closed) / len(closed)
-            self._mc_avg.update_value(fmt_dur(avg, short=True))
+            durations = [s.duration_seconds for s in closed]
+            avg = sum(durations) / len(durations)
+            std = _stats.stdev(durations) if len(durations) > 1 else 0.0
+            self._mc_avg.update_value(fmt_dur(avg, short=True), f"σ {fmt_dur(std, short=True)}")
         else:
             self._mc_avg.update_value("—")
 
@@ -398,17 +388,12 @@ class TaskTabWidget(QWidget):
     def _build(self) -> None:
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setStyleSheet(
-            f"QScrollArea {{ border: none; background: {BG}; }}"
-            f"QScrollBar:vertical {{ background: {BG2}; width: 4px; }}"
-            f"QScrollBar::handle:vertical {{ background: {BORDER}; border-radius: 2px; }}"
-            f"QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}"
-        )
+        scroll.setStyleSheet(SS.scrollarea())
         inner = QWidget()
         inner.setStyleSheet(f"background: {BG};")
         lay = QVBoxLayout(inner)
-        lay.setContentsMargins(PAD_SM, PAD_MD, PAD_MD, PAD_MD)
-        lay.setSpacing(PAD_SM)
+        lay.setContentsMargins(PAD, PAD_MD, PAD_MD, PAD_MD)
+        lay.setSpacing(PAD)
 
         # Header: dot + name + category badge
         hdr = QHBoxLayout()
@@ -421,7 +406,7 @@ class TaskTabWidget(QWidget):
         cat_badge = label(f"  {_cap_tag}  ", MUTED, size=10)
         cat_badge.setStyleSheet(
             f"color: {MUTED}; font-size: 10px; background: {BG3};"
-            f" border: 1px solid {BORDER}; border-radius: 4px; padding: 1px 4px;"
+            f" border: 1px solid {BORDER}; border-radius: {RADIUS}px; padding: 1px 4px;"
         )
         hdr.addWidget(cat_badge)
         hdr.addStretch()
@@ -430,7 +415,7 @@ class TaskTabWidget(QWidget):
 
         # Metric cards (4 across)
         mc_row = QHBoxLayout()
-        mc_row.setSpacing(PAD_SM)
+        mc_row.setSpacing(PAD)
         self._mc_today    = MetricCard("Today")
         self._mc_alltime  = MetricCard("Total (all time)")
         self._mc_sessions = MetricCard("Sessions in range")
@@ -445,13 +430,7 @@ class TaskTabWidget(QWidget):
         sess_hdr.addStretch()
         add_sess_btn = QPushButton("+ Add session")
         add_sess_btn.setFixedHeight(22)
-        add_sess_btn.setStyleSheet(
-            f"QPushButton {{ background: transparent; color: {MUTED};"
-            f" border: 1px solid {BORDER}; border-radius: 4px;"
-            f" font-size: 10px; padding: 0 8px; }}"
-            f" QPushButton:hover {{ color: {TEXT}; background: {BG3};"
-            f" border-color: {BORDER}; }}"
-        )
+        add_sess_btn.setStyleSheet(SS.button("ghost"))
         add_sess_btn.clicked.connect(
             lambda: self.add_session_requested.emit(self._task.start_line)
         )
@@ -469,7 +448,7 @@ class TaskTabWidget(QWidget):
         vsplit = QSplitter(Qt.Vertical)
         vsplit.setChildrenCollapsible(False)
         vsplit.setStyleSheet(
-            f"QSplitter::handle:vertical {{ background: {BORDER}; height: 4px; margin: 1px 0; }}"
+            f"QSplitter::handle:vertical {{ background: {BORDER}; height: 3px; margin: 1px 0; }}"
             f"QSplitter::handle:vertical:hover {{ background: {ACCENT}; }}"
         )
 
@@ -480,7 +459,7 @@ class TaskTabWidget(QWidget):
         row2_w.setStyleSheet(f"background: {BG};")
         row2 = QHBoxLayout(row2_w)
         row2.setContentsMargins(0, 0, 0, 0)
-        row2.setSpacing(PAD_SM)
+        row2.setSpacing(PAD)
         self._histogram = SessionHistogramChart()
         row2.addWidget(make_chart_panel("Session length distribution",
                                         self._histogram))
@@ -517,28 +496,37 @@ class TaskTabWidget(QWidget):
         self._task = task
 
     def refresh(self, start: date, end: date) -> None:
+        import statistics as _stats
         task = self._task
         ts   = TaskSessionStats(task, start, end)
 
         # Today card
         today_sec = _today_seconds([task])
+        today_sess = sum(1 for s in task.sessions if s.start.date() == date.today())
         self._mc_today.update_value(
             fmt_dur(today_sec, short=True),
-            f"{today_sec / 3600:.1f}h so far",
+            f"{today_sess} session{'s' if today_sess != 1 else ''} today",
         )
 
         # All-time card
+        n_days_active = len({s.date for s in task.sessions if not s.is_open})
         self._mc_alltime.update_value(
             fmt_dur(task.total_seconds, short=True),
-            f"{task.total_hours:.1f}h all time",
+            f"over {n_days_active} active day{'s' if n_days_active != 1 else ''}",
         )
         # Range cards
+        range_days = (end - start).days + 1
+        spd = ts.session_count / max(1, range_days)
         self._mc_sessions.update_value(
             str(ts.session_count),
-            f"over {(end - start).days + 1} days",
+            f"μ {spd:.1f}/day  ·  {range_days}d",
         )
-        if ts.avg_session_seconds > 0:
-            self._mc_avg.update_value(fmt_dur(ts.avg_session_seconds, short=True))
+        if ts.avg_session_seconds > 0 and ts.session_durations:
+            std = _stats.stdev(ts.session_durations) if len(ts.session_durations) > 1 else 0.0
+            self._mc_avg.update_value(
+                fmt_dur(ts.avg_session_seconds, short=True),
+                f"σ {fmt_dur(std, short=True)}",
+            )
         else:
             self._mc_avg.update_value("—")
 

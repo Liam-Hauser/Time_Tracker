@@ -21,6 +21,10 @@ There are no tests or linting configuration in this project.
 
 `time_tracker/icon.png` (512×512). Loaded at startup in `run.py` via `QApplication.setWindowIcon` and in `MainWindow.__init__` via `self.setWindowIcon`. Both use `Path(__file__)` resolution so the path is portable.
 
+## Fonts
+
+Geist and Geist Mono TTF files live in `time_tracker/fonts/`. They are loaded via `QFontDatabase.addApplicationFont` in `run.py` before `MainWindow` is created. Fallback stacks: `'Geist, Segoe UI, sans-serif'` and `'Geist Mono, Consolas, monospace'`.
+
 ---
 
 ## Architecture
@@ -55,26 +59,40 @@ Writes go through `DBStore` methods (`clock_in`, `clock_out`, `save_goals`, etc.
 | `RangeStats` | `core/analytics.py` | Pre-computes daily/weekday/hourly aggregates for a date window |
 | `InsightEngine` | `core/analytics.py` | Produces `Insight` objects (streak, peak hour, goal pace, etc.) |
 | `TaskSessionStats` | `core/analytics.py` | Single-task aggregations within a date range |
-| `MainWindow` | `ui/main_window.py` | Orchestrates everything; holds `_result`, `_goals`, `_task_rows`; `_show_archived` toggle filters archived tasks from the list |
+| `MainWindow` | `ui/main_window.py` | Orchestrates everything; holds `_result`, `_goals`; sidebar-driven navigation via `QStackedWidget`; `_show_archived` toggle filters archived tasks |
 | `ReloadWorker` | `ui/main_window.py` | Runs `DBStore.load()` off the main thread via `QThread` |
 | `UpdateChecker` | `ui/main_window.py` | Checks GitHub releases API on startup; emits `update_available` signal if a newer version exists |
 | `CategoryTabWidget` | `ui/tab_widgets.py` | Full chart view scoped to one category |
 | `TaskTabWidget` | `ui/tab_widgets.py` | Full chart/session view scoped to one task |
-| `CalendarWidget` | `ui/calendar_widget.py` | Calendar tab — contribution graph + monthly grid + session day panel |
+| `GoalsTab` | `ui/goals_tab.py` | Goals view — KPI header bar + scrollable grid of `_GoalCard` widgets |
+| `CalendarWidget` | `ui/calendar_widget.py` | Calendar view — contribution graph + week navigation + `WeekGridWidget` |
+| `BaseFormDialog` | `ui/dialogs/base.py` | Shared base class for all modal dialogs; applies `SS.dialog()` stylesheet |
+| `SS` | `ui/theme.py` | Stylesheet factory — `SS.button(variant)`, `SS.input()`, `SS.combo()`, `SS.scrollarea()`, `SS.dialog()` |
+
+### Navigation
+
+`MainWindow` uses a `QStackedWidget` (not `QTabWidget`) for the right panel. The left sidebar drives navigation:
+
+- **Nav section** — Overview / Calendar / Goals items; clicking calls `_select_view("overview"|"calendar"|"goals")`
+- **Category headers** — clicking opens a `CategoryTabWidget` on demand (`_select_view("cat:name")`); the arrow button collapses/expands the task list
+- **Task items** — clicking opens a `TaskTabWidget` on demand (`_select_view("task:name")`)
+- `_category_views` and `_task_views` dicts cache created views so they aren't rebuilt on every visit
 
 ### Timers in MainWindow
 
-- **1 s tick** (`_tick_timer`) — updates elapsed time on the active `TaskRow`
-- **80 ms debounce** (`_refresh_timer`) — batches chart redraws after slider events
+- **1 s tick** (`_tick_timer`) — updates elapsed time in the session bar when clocked in
+- **80 ms debounce** (`_refresh_timer`) — batches chart redraws after date slider events
 - **30 s auto-reload** (`_auto_reload`) — re-queries the DB in the background
 
 ### Goals
 
-Goals (`GoalSpec`: hours + optional deadline) are stored in the DB `goals` table via `DBStore.save_goals()` / `DBStore.load_goals()`. They are applied to `Task` objects after each reload via `_apply_goals_to_tasks()`.
+Goals (`GoalSpec`: hours + optional deadline) are stored in the DB `goals` table via `DBStore.save_goals()` / `DBStore.load_goals()`. Applied to `Task` objects after each reload via `_apply_goals_to_tasks()`. Goals auto-archive 3 days after `completed_on` is set.
 
 ### Theme
 
-All colours, spacing constants, and weekday name arrays live in `ui/theme.py`. Supports dark/light toggle via `set_dark_mode()` / `set_light_mode()`. Charts import tokens directly; `_propagate_to_consumers()` pushes updated values to all consumer modules at toggle time. `analytics.py` late-imports `WEEKDAY_NAMES` from `ui/theme` to avoid a circular import.
+All colours, spacing constants, and font stacks live in `ui/theme.py`. Supports dark/light toggle via `set_dark_mode()` / `set_light_mode()`. `_propagate_to_consumers()` pushes updated values to all consumer modules at toggle time. The `SS` class provides stylesheet factory methods used throughout the UI. `analytics.py` late-imports `WEEKDAY_NAMES` from `ui/theme` to avoid a circular import.
+
+Key tokens: `BG`, `BG2`, `BG3`, `BG4`, `BORDER`, `BORDER2`, `TEXT`, `DIM`, `MUTED`, `FAINT`, `ACCENT`, `SUCCESS`, `WARNING`, `DANGER`, `FONT_UI`, `FONT_MONO`, `RADIUS`, `RADIUS_LG`, `PAD`, `PAD_MD`, `PAD_LG`, `CHART_COLORS`.
 
 ---
 
@@ -85,12 +103,12 @@ tasks            — id, name, category (str tag), color (hex), archived (bool)
 historic_clocks  — id, tasks_id (FK), total_sec, start_time, end_time
 current_clocks   — id, task_id (FK), start_time    ← open session
 categories       — id, name, colour_tag             ← key into TAG_PALETTES
-goals            — (managed via DBStore.save_goals)
+goals            — id, tasks_id (FK), target_hours, by_date, completed_on, archived
 ```
 
 Migrations live in `database/alembic/versions/`. They run automatically on startup via `database/migrate.py` — no manual `alembic` commands needed.
 
-DB path: `timetracker.db` in project root (dev) or `%LOCALAPPDATA%/TimeTracker/timetracker.db` (frozen exe). No `.env` or credentials required.
+DB path: `timetracker.db` in project root (dev) or `%LOCALAPPDATA%/TimeTracker/timetracker.db` (frozen exe).
 
 ---
 
@@ -98,41 +116,38 @@ DB path: `timetracker.db` in project root (dev) or `%LOCALAPPDATA%/TimeTracker/t
 
 | Chart | Class | Used in |
 |---|---|---|
-| Stacked area (daily totals) | `StackedAreaChart` | Main tab, Category tab |
-| Weekday bar (avg by weekday) | `WeekdayBarChart` | Main tab, Category tab |
-| Hour heatmap | `HourHeatmap` | Main tab, Category tab |
-| Week-over-week comparison | `WeeklyCompChart` | Main tab, Category tab |
-| Category breakdown bar | `CategoryBreakdownChart` | Main tab |
-| Category pie | `CategoryPieChart` | Category tab |
-| Daily bar (single task) | `DailyBarChart` | Task tab |
-| Session length histogram | `SessionHistogramChart` | Task tab |
-| Time-of-day bar | `TimeOfDayBarChart` | Task tab |
-| Cumulative pace | `CumulativePaceChart` | Task tab |
+| Stacked area (daily totals) | `StackedAreaChart` | Overview, Category view |
+| Weekday bar (avg by weekday) | `WeekdayBarChart` | Overview, Category view |
+| Hour heatmap | `HourHeatmap` | Overview, Category view |
+| Week-over-week comparison | `WeeklyCompChart` | Overview, Category view |
+| Category pie | `CategoryPieChart` | Overview, Category view |
+| Daily bar (single task) | `DailyBarChart` | Task view |
+| Session length histogram | `SessionHistogramChart` | Task view |
+| Time-of-day bar | `TimeOfDayBarChart` | Task view |
+| Cumulative pace | `CumulativePaceChart` | Task view |
 
-All charts receive data via a `.refresh(data)` call and repaint via `QPainter`.
+All charts receive data via a `.refresh(data)` call and repaint via `QPainter`. Grid lines use `Qt.DashLine`. Colors come from `CHART_COLORS` in `theme.py`.
 
 ---
 
-## Calendar tab (`ui/calendar_widget.py`)
-
-Implemented. File: `time_tracker/ui/calendar_widget.py`.  Added as a pinned tab (index 1, non-closeable) in `MainWindow`.
-
-### Classes
+## Calendar view (`ui/calendar_widget.py`)
 
 | Class | Role |
 |---|---|
-| `ContributionGraph` | GitHub-style 52-week heat map (QPainter). Colours assigned by **percentile rank** of each day vs all days (top 10 % → brightest). Hover tooltip shows date + hours. Click to jump to that week. |
-| `WeekGridWidget` | 7-column week timeline (QPainter). Sessions positioned by clock time — y-axis is 24 h, height is proportional to duration. Hover a block → inline edit (click body) / delete (click ✕ corner). Click empty space → add dialog pre-filled to that time slot. 60-second timer refreshes the current-time indicator. |
-| `CalendarWidget` | Top-level assembly. Contribution strip (no title) + week nav bar + scrollable `WeekGridWidget`. `reload_needed` signal propagates to `MainWindow._trigger_reload`. |
-| `_CalendarAddSessionDialog` | Modal — task picker + start/end datetime pickers. Accepts `preset_start`/`preset_end` so the click position pre-fills the time. |
+| `ContributionGraph` | GitHub-style 52-week heat map (QPainter). Colours by percentile rank. Hover tooltip shows date + hours. Click jumps to that week. |
+| `WeekGridWidget` | 7-column week timeline (QGraphicsView). Sessions positioned by clock time; height proportional to duration. Click session to edit/delete; click empty space to add. |
+| `CalendarWidget` | Assembly: contribution strip + week nav bar + `WeekGridWidget`. Emits `reload_needed` after any write. |
+| `_CalendarAddSessionDialog` | Task picker + datetime pickers. Pre-fills time from click position. |
 
-### Data flow
+---
 
-```
-ParseResult.tasks  →  CalendarWidget.refresh()
-    → ContributionGraph.refresh(total_by_day)      # seconds summed per day
-    → MonthGridWidget.refresh(tasks)               # sessions grouped by date
-    → SessionDayPanel.show_day(date, tasks)        # on day click
-```
+## Dialogs (`ui/dialogs/`)
 
-Writes go directly through `DBStore.update_session`, `DBStore.delete_session`, `DBStore.add_session`, then `reload_needed` is emitted to trigger a full reload.
+All dialogs extend `BaseFormDialog` from `ui/dialogs/base.py`, which applies `SS.dialog()` styling and provides `_make_field()`, `_make_header()`, and `_make_footer()` helpers.
+
+| File | Dialogs |
+|---|---|
+| `goal_dialogs.py` | `AddGoalDialog`, `EditGoalDialog` |
+| `task_dialogs.py` | `NewTaskDialog`, `RenameTaskDialog`, `MoveTaskDialog` |
+| `category_dialogs.py` | `NewCategoryDialog`, `RenameCategoryDialog` |
+| `session_dialogs.py` | `AddSessionDialog`, `EditSessionDialog` |

@@ -101,7 +101,7 @@ _HEAT_LIGHT = [
 _CELL, _GAP  = 12, 2
 _STEP        = _CELL + _GAP
 _WEEKS       = 53
-_CG_LEFT     = 32   # room for day labels
+_CG_LEFT     = 42   # room for day labels
 _CG_TOP      = 18   # room for month labels
 
 
@@ -204,9 +204,11 @@ class ContributionGraph(QWidget):
                 p.drawText(_CG_LEFT + ox + w * step, _CG_TOP - 3,
                            _MONTH_NAMES[d.month - 1])
 
+        fm = p.fontMetrics()
         for dow in (0, 2, 4):
-            p.drawText(ox, _CG_TOP + dow * step + step - 4,
-                       _DAY_SHORT[dow][:3])
+            txt = _DAY_SHORT[dow][:3]
+            tw = fm.horizontalAdvance(txt)
+            p.drawText(_CG_LEFT + ox - tw - 6, _CG_TOP + dow * step + step - 4, txt)
 
         for w in range(_WEEKS):
             for dow in range(7):

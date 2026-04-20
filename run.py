@@ -12,13 +12,19 @@ from pathlib import Path
 # High-DPI + platform setup before QApplication
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QIcon, QPainter, QPainterPath
+from PyQt5.QtGui import QIcon, QPainter, QPainterPath, QFontDatabase
 
 QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
 QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
 
 app = QApplication(sys.argv)
 app.setApplicationName("Time Tracker")
+
+# ── Load bundled fonts ────────────────────────────────────────────────────────
+_fonts_dir = Path(__file__).parent / "time_tracker" / "fonts"
+if _fonts_dir.exists():
+    for _f in _fonts_dir.glob("*.ttf"):
+        QFontDatabase.addApplicationFont(str(_f))
 
 # ── Database setup ────────────────────────────────────────────────────────────
 from PyQt5.QtWidgets import QMessageBox, QSplashScreen
