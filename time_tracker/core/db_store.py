@@ -10,7 +10,7 @@ import threading
 from datetime import datetime
 from typing import Optional
 
-from .models import Task, Session, GoalSpec, colour_for_tag, CATEGORY_COLOUR_TAG
+from .models import Task, Session, GoalSpec, generate_category_colors
 from .parser import ParseResult
 
 
@@ -35,13 +35,16 @@ class DBStore:
         """Query all tasks and clock records; return an immutable ParseResult."""
         from database.db import SessionLocal
         from database.models import (
-            Task as DBTask, HistoricClock, CurrentClock,
+            Task as DBTask, HistoricClock, CurrentClock, Category as DBCategory,
         )
 
         with SessionLocal() as db:
             db_tasks   = db.query(DBTask).all()
             historics  = db.query(HistoricClock).all()
             currents   = db.query(CurrentClock).all()
+            categories = db.query(DBCategory).all()
+
+            cat_colour_tags = {c.name: (c.colour_tag or "none") for c in categories}
 
             # Group clocks by task id
             hist_by_task: dict[int, list] = {}
@@ -50,16 +53,10 @@ class DBStore:
 
             curr_by_task = {cc.task_id: cc for cc in currents}
 
-            tag_counters: dict[str, int] = {}
             tasks: list[Task] = []
 
             for db_task in db_tasks:
                 tag = db_task.category or "none"
-                idx = tag_counters.get(tag, 0)
-                tag_counters[tag] = idx + 1
-
-                # Prefer stored colour; fall back to derived
-                colour = db_task.color or colour_for_tag(tag, idx)
 
                 sessions: list[Session] = []
 
@@ -84,18 +81,54 @@ class DBStore:
                 tasks.append(Task(
                     name=db_task.name or "",
                     tag=tag,
-                    colour=colour,
+                    colour="#888888",           # placeholder; assigned below
                     start_line=db_task.id,      # repurposed: DB task id
                     sessions=sessions,
                     archived=bool(db_task.archived),
                 ))
+
+        # Assign gradient colors per category.
+        # Sort by total seconds desc (most-used = index 0 = darkest) then by
+        # db_id asc as a stable tie-breaker so colors don't shuffle on ties.
+        from .models import hue_for_tag
+        from collections import defaultdict
+
+        tasks_by_cat: dict[str, list[Task]] = {}
+        for t in tasks:
+            tasks_by_cat.setdefault(t.tag, []).append(t)
+
+        # Compute base hue per category, then spread any that share the same hue
+        # so distinct categories never end up the same colour family.
+        cat_hues: dict[str, int] = {
+            cat: hue_for_tag(cat_colour_tags.get(cat, "none"))
+            for cat in tasks_by_cat
+        }
+        hue_groups: dict[int, list[str]] = defaultdict(list)
+        for cat, hue in cat_hues.items():
+            hue_groups[hue].append(cat)
+
+        for hue, shared_cats in hue_groups.items():
+            if len(shared_cats) > 1:
+                shared_cats = sorted(shared_cats)   # stable order
+                n = len(shared_cats)
+                step = 45                            # degrees between each sibling
+                half_span = step * (n - 1) / 2
+                for i, cat in enumerate(shared_cats):
+                    cat_hues[cat] = int((hue + i * step - half_span) % 360)
+
+        for cat_name, cat_tasks in tasks_by_cat.items():
+            hue = cat_hues.get(cat_name, 210)
+            cat_tasks.sort(key=lambda t: (-t.total_seconds, t.start_line))
+            colors = generate_category_colors(str(hue), len(cat_tasks))
+            for task, color in zip(cat_tasks, colors):
+                task.colour = color
 
         return ParseResult(tasks=tasks, raw_lines=[], parsed_at=datetime.now())
 
     # ── Create task ──────────────────────────────────────────
 
     def create_task(self, name: str, category: str) -> None:
-        """Insert a new task row. Derives and stores the colour immediately."""
+        """Insert a new task row. Color is computed dynamically on load()."""
         from database.db import SessionLocal
         from database.models import Task as DBTask
 
@@ -104,10 +137,7 @@ class DBStore:
                 existing = db.query(DBTask).filter_by(name=name).first()
                 if existing:
                     raise ValueError(f"A task named '{name}' already exists")
-                colour_tag = CATEGORY_COLOUR_TAG.get(category, "none")
-                count  = db.query(DBTask).filter_by(category=category).count()
-                colour = colour_for_tag(colour_tag, count)
-                db.add(DBTask(name=name, category=category, color=colour))
+                db.add(DBTask(name=name, category=category))
                 db.commit()
 
     # ── Task editing ─────────────────────────────────────────
@@ -134,9 +164,6 @@ class DBStore:
             with SessionLocal() as db:
                 task = self._get_task(db, task_id)
                 task.category = new_category
-                count = db.query(DBTask).filter_by(category=new_category).count()
-                colour_tag = CATEGORY_COLOUR_TAG.get(new_category, "none")
-                task.color = colour_for_tag(colour_tag, count - 1)
                 db.commit()
 
     def set_archived(self, task_id: int, archived: bool) -> None:
@@ -186,6 +213,19 @@ class DBStore:
                 if existing:
                     raise ValueError(f"A category named '{name}' already exists")
                 db.add(DBCategory(name=name, colour_tag=colour_tag))
+                db.commit()
+
+    def recolor_category(self, cat_name: str, new_colour_tag: str) -> None:
+        """Update a category's colour_tag. Colors are recomputed on next load()."""
+        from database.db import SessionLocal
+        from database.models import Category as DBCategory
+
+        with self._lock:
+            with SessionLocal() as db:
+                cat = db.query(DBCategory).filter_by(name=cat_name).first()
+                if cat is None:
+                    raise ValueError(f"Category '{cat_name}' not found")
+                cat.colour_tag = new_colour_tag
                 db.commit()
 
     def rename_category(self, old_name: str, new_name: str) -> None:

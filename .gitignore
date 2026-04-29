@@ -6,6 +6,7 @@ build/
 timetracker.db
 timetracker.db-shm
 timetracker.db-wal
+custom_presets.json
 __pycache__/
 *.pyc
 dist/TimeTracker.zip

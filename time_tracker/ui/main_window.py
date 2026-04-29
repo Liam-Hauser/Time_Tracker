@@ -26,7 +26,7 @@ from ..core import (
     this_month_range, last_month_range, last_n_days,
     fmt_dur,
 )
-from ..core.models import Task, CATEGORY_COLOUR_TAG as _CATEGORY_COLOUR_TAG_IMPORT
+from ..core.models import Task, category_swatch as _category_swatch
 from ..charts.panels import (
     StackedAreaChart, WeekdayBarChart, HourHeatmap, WeeklyCompChart,
     CategoryPieChart,
@@ -41,7 +41,7 @@ from .widgets import (
 from .dialogs import (
     AddGoalDialog, EditGoalDialog,
     NewTaskDialog, RenameTaskDialog, MoveTaskDialog,
-    NewCategoryDialog, RenameCategoryDialog,
+    NewCategoryDialog, RenameCategoryDialog, RecolorCategoryDialog,
 )
 from .tab_widgets import CategoryTabWidget, TaskTabWidget
 from .calendar_widget import CalendarWidget
@@ -115,10 +115,8 @@ def _goal_is_archived(gs, today) -> bool:
 
 
 def _swatch_for_tag(colour_tag: str) -> str:
-    """Return the representative hex for a TAG_PALETTES key."""
-    from ..core.models import TAG_PALETTES
-    palette = TAG_PALETTES.get(colour_tag, TAG_PALETTES["none"])
-    return palette[1] if len(palette) > 1 else palette[0]
+    """Return the representative hex for a colour_tag (named or numeric)."""
+    return _category_swatch(colour_tag)
 
 
 # Main window
@@ -166,8 +164,12 @@ class MainWindow(QMainWindow):
         self._all_dates: list[date] = []
         self._show_archived = False
 
+        from ..core.user_presets import load_presets
+        self._custom_presets = load_presets()
+
         self._thread: Optional[QThread]      = None
         self._worker: Optional[ReloadWorker] = None
+        self._reload_pending: bool           = False
 
         self._apply_palette()
         self._build_ui()
@@ -583,6 +585,10 @@ class MainWindow(QMainWindow):
         rl.setSpacing(PAD)
         self._preset_bar = PresetBar()
         self._preset_bar.preset_selected.connect(self._on_preset)
+        self._preset_bar.add_custom_requested.connect(self._on_add_custom_preset)
+        self._preset_bar.remove_custom_requested.connect(self._on_remove_custom_preset)
+        if hasattr(self, "_custom_presets"):
+            self._preset_bar.set_custom_presets(self._custom_presets)
         rl.addWidget(self._preset_bar)
         self._range_slider = RangeSlider()
         self._range_slider.range_changed.connect(self._on_range_changed)
@@ -772,6 +778,7 @@ class MainWindow(QMainWindow):
 
     def _trigger_reload(self) -> None:
         if self._thread and self._thread.isRunning():
+            self._reload_pending = True
             return
         self._thread = QThread(self)
         self._worker = ReloadWorker(self._store)
@@ -790,6 +797,9 @@ class MainWindow(QMainWindow):
             if self._worker.categories:
                 self._categories = self._worker.categories
             self._on_reload_done(self._worker.result)
+        if self._reload_pending:
+            self._reload_pending = False
+            self._trigger_reload()
 
     def _on_reload_done(self, result: ParseResult) -> None:
         self.setUpdatesEnabled(False)
@@ -797,6 +807,9 @@ class MainWindow(QMainWindow):
             self._result = result
             self._apply_goals_to_tasks()
 
+            old_count = len(self._all_dates)
+            prev_low  = self._date_low
+            prev_high = self._date_high
             all_dates: set[date] = set()
             for t in result.tasks:
                 for s in t.sessions:
@@ -805,15 +818,18 @@ class MainWindow(QMainWindow):
 
             if self._all_dates:
                 new_count = len(self._all_dates)
-                prev_high = self._date_high
                 self._range_slider.set_count(new_count)
-                # Preserve range on auto-reload (when user has set a non-default range)
-                if prev_high == 0 or prev_high >= new_count:
+                if old_count == 0:
+                    # First load — show everything
                     self._date_low  = 0
                     self._date_high = new_count - 1
                 else:
-                    self._date_low  = min(self._date_low,  new_count - 1)
-                    self._date_high = min(self._date_high, new_count - 1)
+                    # Preserve the user's selection.
+                    # If high was at the last date, extend it to include any new dates
+                    # (e.g. first session of a new calendar day) without resetting low.
+                    at_max = prev_high >= old_count - 1
+                    self._date_high = new_count - 1 if at_max else min(prev_high, new_count - 1)
+                    self._date_low  = min(prev_low, self._date_high)
                 self._range_slider.set_range(self._date_low, self._date_high)
 
             ts = result.parsed_at.strftime("%H:%M:%S")
@@ -1392,19 +1408,27 @@ class MainWindow(QMainWindow):
     def _on_preset(self, preset: str) -> None:
         if not self._all_dates:
             return
-        presets = {
-            "Last 7d":    last_n_days(7),
-            "Last 30d":   last_n_days(30),
-            "This month": this_month_range(),
-            "Last month": last_month_range(),
-            "This week":  this_week_range(),
-            "Last week":  last_week_range(),
-            "All":        (self._all_dates[0], self._all_dates[-1]),
-        }
-        rng = presets.get(preset)
-        if not rng:
-            return
-        start, end = rng
+        if preset.startswith("custom:"):
+            idx = int(preset[7:])
+            if idx >= len(self._custom_presets):
+                return
+            cp    = self._custom_presets[idx]
+            start = cp.from_date
+            end   = cp.to_date or date.today()
+        else:
+            presets = {
+                "Last 7d":    last_n_days(7),
+                "Last 30d":   last_n_days(30),
+                "This month": this_month_range(),
+                "Last month": last_month_range(),
+                "This week":  this_week_range(),
+                "Last week":  last_week_range(),
+                "All":        (self._all_dates[0], self._all_dates[-1]),
+            }
+            rng = presets.get(preset)
+            if not rng:
+                return
+            start, end = rng
         low  = min(range(len(self._all_dates)),
                    key=lambda i: abs((self._all_dates[i] - start).days))
         high = min(range(len(self._all_dates)),
@@ -1413,6 +1437,37 @@ class MainWindow(QMainWindow):
         self._range_slider.set_range(low, high)
         self._date_low, self._date_high = low, high
         self._refresh_all()
+
+    def _on_add_custom_preset(self) -> None:
+        from .dialogs import AddCustomPresetDialog
+        from ..core.user_presets import CustomPreset, save_presets
+        if len(self._custom_presets) >= 5:
+            QMessageBox.information(self, "Limit reached",
+                                    "You can have at most 5 custom presets.\n"
+                                    "Right-click an existing one to remove it first.")
+            return
+        dlg = AddCustomPresetDialog(parent=self)
+        if dlg.exec_() != QDialog.Accepted:
+            return
+        lbl, from_d, to_d = dlg.values()
+        self._custom_presets.append(CustomPreset(label=lbl, from_date=from_d, to_date=to_d))
+        save_presets(self._custom_presets)
+        self._preset_bar.set_custom_presets(self._custom_presets)
+
+    def _on_remove_custom_preset(self, idx: int) -> None:
+        from ..core.user_presets import save_presets
+        if not (0 <= idx < len(self._custom_presets)):
+            return
+        lbl = self._custom_presets[idx].label
+        reply = QMessageBox.question(
+            self, "Remove Preset", f"Remove preset \"{lbl}\"?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        self._custom_presets.pop(idx)
+        save_presets(self._custom_presets)
+        self._preset_bar.set_custom_presets(self._custom_presets)
 
     # ── New task ─────────────────────────────────────────
 
@@ -1443,6 +1498,7 @@ class MainWindow(QMainWindow):
         )
         menu.addAction("New category…", self._on_new_category)
         menu.addAction("Rename category…", self._on_rename_category)
+        menu.addAction("Recolor category…", self._on_recolor_category)
         pos = btn.mapToGlobal(btn.rect().bottomLeft())
         menu.exec_(pos)
 
@@ -1473,6 +1529,22 @@ class MainWindow(QMainWindow):
             self._store.rename_category(old_name, new_name)
         except Exception as e:
             QMessageBox.warning(self, "Failed to rename category", str(e))
+            return
+        self._categories = self._store.load_categories()
+        self._trigger_reload()
+
+    def _on_recolor_category(self) -> None:
+        if not self._categories:
+            QMessageBox.information(self, "No categories", "No categories to recolor.")
+            return
+        dlg = RecolorCategoryDialog(self._categories, parent=self)
+        if dlg.exec_() != QDialog.Accepted:
+            return
+        cat_name, new_colour_tag = dlg.values()
+        try:
+            self._store.recolor_category(cat_name, new_colour_tag)
+        except Exception as e:
+            QMessageBox.warning(self, "Failed to recolor category", str(e))
             return
         self._categories = self._store.load_categories()
         self._trigger_reload()

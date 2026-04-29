@@ -622,31 +622,104 @@ class RangeSlider(QWidget):
 # ──────────────────────────────────────────────────────────
 
 class PresetBar(QWidget):
-    preset_selected = pyqtSignal(str)
-    PRESETS = ["7d", "30d", "Month", "Last mo.", "Week", "Last wk", "All"]
+    preset_selected      = pyqtSignal(str)
+    add_custom_requested = pyqtSignal()
+    remove_custom_requested = pyqtSignal(int)
+
+    PRESETS     = ["7d", "30d", "Month", "Last mo.", "Week", "Last wk", "All"]
     PRESET_KEYS = ["Last 7d", "Last 30d", "This month", "Last month",
                    "This week", "Last week", "All"]
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(4)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(3)
+
+        built_row = QWidget()
+        built_row.setStyleSheet("background: transparent;")
+        bl = QHBoxLayout(built_row)
+        bl.setContentsMargins(0, 0, 0, 0)
+        bl.setSpacing(4)
         for display, key in zip(self.PRESETS, self.PRESET_KEYS):
             btn = QPushButton(display)
             btn.setFixedHeight(22)
-            btn.setStyleSheet(
-                f"QPushButton {{ background: transparent; color: {MUTED};"
-                f" border: 1px solid {BORDER}; border-radius: {RADIUS}px;"
-                f" font-size: 10px; font-family: {FONT_UI}; padding: 0 7px; }}"
-                f" QPushButton:hover {{ color: {TEXT}; border-color: {BORDER2};"
-                f" background: {BG3}; }}"
+            btn.setStyleSheet(self._btn_ss())
+            btn.clicked.connect(lambda _, k=key: self.preset_selected.emit(k))
+            bl.addWidget(btn)
+        bl.addStretch()
+        outer.addWidget(built_row)
+
+        self._custom_row = QWidget()
+        self._custom_row.setStyleSheet("background: transparent;")
+        self._custom_lay = QHBoxLayout(self._custom_row)
+        self._custom_lay.setContentsMargins(0, 0, 0, 0)
+        self._custom_lay.setSpacing(4)
+        outer.addWidget(self._custom_row)
+        self._custom_presets: list = []
+        self._rebuild_custom_row()
+
+    def _btn_ss(self) -> str:
+        return (
+            f"QPushButton {{ background: transparent; color: {MUTED};"
+            f" border: 1px solid {BORDER}; border-radius: {RADIUS}px;"
+            f" font-size: 10px; font-family: {FONT_UI}; padding: 0 7px; }}"
+            f" QPushButton:hover {{ color: {TEXT}; border-color: {BORDER2};"
+            f" background: {BG3}; }}"
+        )
+
+    def _custom_btn_ss(self) -> str:
+        return (
+            f"QPushButton {{ background: transparent; color: {ACCENT};"
+            f" border: 1px solid {ACCENT}; border-radius: {RADIUS}px;"
+            f" font-size: 10px; font-family: {FONT_UI}; padding: 0 7px; }}"
+            f" QPushButton:hover {{ color: {TEXT}; border-color: {BORDER2};"
+            f" background: {BG3}; }}"
+        )
+
+    def set_custom_presets(self, presets: list) -> None:
+        self._custom_presets = presets
+        self._rebuild_custom_row()
+
+    def _rebuild_custom_row(self) -> None:
+        while self._custom_lay.count():
+            item = self._custom_lay.takeAt(0)
+            if w := item.widget():
+                w.deleteLater()
+
+        for i, preset in enumerate(self._custom_presets):
+            btn = QPushButton(preset.label)
+            btn.setFixedHeight(22)
+            btn.setStyleSheet(self._custom_btn_ss())
+            btn.setToolTip("Right-click to remove")
+            btn.clicked.connect(lambda _, k=f"custom:{i}": self.preset_selected.emit(k))
+            btn.setContextMenuPolicy(Qt.CustomContextMenu)
+            btn.customContextMenuRequested.connect(
+                lambda _pos, idx=i, b=btn: self._show_remove_menu(idx, b)
             )
-            btn.clicked.connect(
-                lambda _, k=key: self.preset_selected.emit(k)
-            )
-            lay.addWidget(btn)
-        lay.addStretch()
+            self._custom_lay.addWidget(btn)
+
+        if len(self._custom_presets) < 5:
+            add_btn = QPushButton("+")
+            add_btn.setFixedHeight(22)
+            add_btn.setFixedWidth(26)
+            add_btn.setToolTip("Add custom date preset")
+            add_btn.setStyleSheet(self._btn_ss())
+            add_btn.clicked.connect(self.add_custom_requested.emit)
+            self._custom_lay.addWidget(add_btn)
+
+        self._custom_lay.addStretch()
+
+    def _show_remove_menu(self, idx: int, btn) -> None:
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            f"QMenu {{ background: {BG3}; color: {TEXT}; border: 1px solid {BORDER};"
+            f" border-radius: {RADIUS}px; font-size: 10px; font-family: {FONT_UI}; }}"
+            f" QMenu::item {{ padding: 4px 16px; }}"
+            f" QMenu::item:selected {{ background: {BG4}; }}"
+        )
+        menu.addAction("Remove preset", lambda: self.remove_custom_requested.emit(idx))
+        menu.exec_(btn.mapToGlobal(btn.rect().bottomLeft()))
 
 
 # ──────────────────────────────────────────────────────────

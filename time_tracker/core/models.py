@@ -8,6 +8,7 @@ backwards-compatibility with existing callers.
 """
 
 from __future__ import annotations
+import colorsys as _colorsys
 from dataclasses import dataclass, field
 from datetime import datetime, date, timedelta
 from typing import Optional
@@ -15,33 +16,86 @@ import re
 
 
 # ──────────────────────────────────────────────────────────
-# Colour palette (mirrors the JS dashboard)
+# Mathematical colour generation
 # ──────────────────────────────────────────────────────────
-TAG_PALETTES: dict[str, list[str]] = {
-    "blue":   ["#0C447C", "#185FA5", "#378ADD"],
-    "red":    ["#A32D2D", "#DC3912", "#FF6655"],
-    "yellow": ["#854F0B", "#FF9900", "#FFBB44"],
-    "green":  ["#3B6D11", "#639922", "#97C459"],
-    "purple": ["#534AB7", "#7F77DD", "#AFA9EC"],
-    "brown":  ["#6B4F2E", "#8B6C42", "#A88B6A"],
-    "white":  ["#888780", "#AAAAAA", "#CCCCCC"],
-    "black":  ["#222222", "#444444", "#666666"],
-    "none":   ["#5F5E5A", "#888780", "#B4B2A9"],
+
+# Named tag → base hue (degrees, 0–360).
+# Hues are intentionally well-separated so named tags don't look alike.
+_TAG_HUES: dict[str, int] = {
+    "blue":   210,
+    "red":    5,
+    "yellow": 48,
+    "green":  130,
+    "purple": 270,
+    "brown":  25,
+    "white":  185,   # teal-cyan — clearly distinct from blue (210)
+    "black":  315,   # pink-magenta — distinct from purple (270) and blue
+    "none":   35,    # amber-orange fallback, away from all named tags
 }
 
-# Maps human-readable category names to their colour tag in TAG_PALETTES.
-CATEGORY_COLOUR_TAG: dict[str, str] = {
-    "Mathematics":       "blue",
-    "EOR":               "red",
-    "Personal Projects": "yellow",
-    "Personal Growth":   "white",
-    "Interview Prep":    "purple",
-}
+# No longer used for lookups; kept as an empty dict so old imports don't crash.
+CATEGORY_COLOUR_TAG: dict[str, str] = {}
+
+
+def hue_for_tag(colour_tag: str | None) -> int:
+    """Return hue (0–360) for a colour_tag — accepts named tags or numeric strings."""
+    if not colour_tag:
+        return _TAG_HUES["none"]
+    try:
+        return int(colour_tag) % 360
+    except (ValueError, TypeError):
+        return _TAG_HUES.get(colour_tag, _TAG_HUES["none"])
+
+
+def hsl_to_hex(h: float, s: float, l: float) -> str:  # noqa: E741
+    """Convert HSL (h: 0–360, s: 0–100, l: 0–100) to '#rrggbb'."""
+    r, g, b = _colorsys.hls_to_rgb(h / 360.0, l / 100.0, s / 100.0)
+    return f"#{int(r * 255):02x}{int(g * 255):02x}{int(b * 255):02x}"
+
+
+def generate_category_colors(colour_tag: str | None, n: int) -> list[str]:
+    """Generate *n* visually distinct gradient colors within a single hue family.
+
+    The lightness/saturation range is intentionally wide so even categories with
+    many tasks (10+) have clearly different shades. Dark end = index 0 (most
+    saturated), light end = last index.
+    """
+    hue = hue_for_tag(colour_tag)
+    if n == 0:
+        return []
+    if n == 1:
+        return [hsl_to_hex(hue, 82, 42)]
+
+    L_DARK, L_LIGHT = 24, 55   # lightness span
+    S_DARK, S_LIGHT = 90, 68   # saturation (dark end = rich, light end = still vibrant)
+
+    return [
+        hsl_to_hex(
+            hue,
+            S_DARK + (S_LIGHT - S_DARK) * i / (n - 1),
+            L_DARK + (L_LIGHT - L_DARK) * i / (n - 1),
+        )
+        for i in range(n)
+    ]
+
+
+def category_swatch(colour_tag: str | None) -> str:
+    """Representative midpoint hex for a colour_tag (used in UI swatches)."""
+    return hsl_to_hex(hue_for_tag(colour_tag), 82, 42)
 
 
 def colour_for_tag(tag: str, index: int) -> str:
-    palette = TAG_PALETTES.get(tag, TAG_PALETTES["none"])
-    return palette[min(index, len(palette) - 1)]
+    """Legacy shim — returns a single color for a (tag, position) pair."""
+    n = max(index + 1, 3)
+    colors = generate_category_colors(tag, n)
+    return colors[min(index, len(colors) - 1)]
+
+
+# TAG_PALETTES kept for any code that still imports it — now math-generated.
+TAG_PALETTES: dict[str, list[str]] = {
+    name: generate_category_colors(str(hue), 3)
+    for name, hue in _TAG_HUES.items()
+}
 
 
 # ──────────────────────────────────────────────────────────

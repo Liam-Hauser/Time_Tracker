@@ -79,6 +79,42 @@ def _smart_date_ticks(days: list[date],
 
 
 # ──────────────────────────────────────────────────────────
+# Task sort helpers (category-grouped)
+# ──────────────────────────────────────────────────────────
+
+def _cat_totals(tasks, stats) -> dict:
+    totals: dict[str, float] = {}
+    for t in tasks:
+        totals[t.tag] = totals.get(t.tag, 0.0) + stats.task_seconds.get(t.name, 0.0)
+    return totals
+
+
+def _group_by_cat_asc(tasks, stats):
+    """Category-grouped sort for stacked charts (ascending = bottom-first rendering).
+
+    Category with least total time sits at the bottom; within each category,
+    the task with the least time is at the bottom. This puts the dominant
+    category and its most-used task on top of the visual stack.
+    """
+    totals = _cat_totals(tasks, stats)
+    return sorted(tasks, key=lambda t: (
+        totals.get(t.tag, 0.0),
+        t.tag,
+        stats.task_seconds.get(t.name, 0.0),
+    ))
+
+
+def _group_by_cat_desc(tasks, stats):
+    """Category-grouped sort for legend/pie/bar charts (descending = most first)."""
+    totals = _cat_totals(tasks, stats)
+    return sorted(tasks, key=lambda t: (
+        -totals.get(t.tag, 0.0),
+        t.tag,
+        -stats.task_seconds.get(t.name, 0.0),
+    ))
+
+
+# ──────────────────────────────────────────────────────────
 # Base chart widget
 # ──────────────────────────────────────────────────────────
 
@@ -230,8 +266,7 @@ class StackedAreaChart(NativeChart):
     def _paint(self, p: QPainter) -> None:
         stats  = self._stats
         days   = date_range(stats.start, stats.end)
-        active = sorted(stats.active_tasks,
-                        key=lambda t: stats.task_seconds.get(t.name, 0))
+        active = _group_by_cat_asc(stats.active_tasks, stats)
         if not active or not days:
             self._draw_no_data(p)
             return
@@ -443,8 +478,7 @@ class WeekdayBarChart(NativeChart):
 
     def _paint(self, p: QPainter) -> None:
         stats  = self._stats
-        active = sorted(stats.active_tasks,
-                        key=lambda t: stats.task_seconds.get(t.name, 0))
+        active = _group_by_cat_asc(stats.active_tasks, stats)
         if not active:
             self._draw_no_data(p)
             return
@@ -553,7 +587,7 @@ class HourHeatmap(NativeChart):
 
     def _paint(self, p: QPainter) -> None:
         stats  = self._stats
-        active = stats.active_tasks
+        active = _group_by_cat_desc(stats.active_tasks, stats)
         if not active:
             self._draw_no_data(p)
             return
@@ -709,7 +743,8 @@ class WeeklyCompChart(NativeChart):
             self._draw_no_data(p)
             return
 
-        names   = list(all_tasks.keys())
+        sorted_tasks = _group_by_cat_desc(list(all_tasks.values()), comp.this_week)
+        names   = [t.name for t in sorted_tasks]
         name_w  = 110
         bar_area_x = name_w + 8
         bar_area_w = self.width() - bar_area_x - self._PAD[1]
@@ -798,9 +833,7 @@ class CategoryPieChart(NativeChart):
 
     def _paint(self, p: QPainter) -> None:
         stats  = self._stats
-        active = sorted(stats.active_tasks,
-                        key=lambda t: stats.task_seconds.get(t.name, 0),
-                        reverse=True)
+        active = _group_by_cat_desc(stats.active_tasks, stats)
         if not active:
             self._draw_no_data(p)
             return
