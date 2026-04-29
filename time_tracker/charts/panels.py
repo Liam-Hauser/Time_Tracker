@@ -255,8 +255,10 @@ class StackedAreaChart(NativeChart):
     - 7-day rolling average line (dashed, ACCENT colour)
     - Required h/day horizontal reference line (dotted, WARNING colour)
     """
-    # bottom = 24 (x-axis) + 3×18 (task legend) + 6 (gap) + 18 (line legend) + 8 (margin)
-    _PAD = (20, 16, 110, 56)
+    # bottom pad is recomputed per-refresh based on actual task count
+    _PAD = (20, 16, 110, 56)  # class default (3-row legend)
+
+    _MIN_PLOT_H = 180   # minimum height of the chart area itself
 
     def __init__(self, parent=None):
         super().__init__(fixed_height=340, parent=parent)
@@ -266,7 +268,49 @@ class StackedAreaChart(NativeChart):
                 goals: dict | None = None) -> None:
         self._stats = stats
         self._goals = goals or {}
+        if stats is not None:
+            self._recompute_size(stats)
         self.update()
+
+    def _recompute_size(self, stats: RangeStats) -> None:
+        """Set instance _PAD and minimum height to exactly fit the legend content."""
+        import math as _math
+        from PyQt5.QtGui import QFontMetrics as _FM
+        pt, _pr, _pb, pl = self._PAD
+        pr = 16
+
+        n = len(stats.active_tasks)
+        legend_w = max(self.width() - pl - pr, 320)  # fallback before first paint
+
+        # Measure actual item widths with the legend font
+        fm = _FM(_font(9))
+        DOT, GAP_TEXT, GAP_ITEM = 8, 4, 16
+        row_w, n_rows = 0, 1
+        for task in stats.active_tasks:
+            name = task.name if len(task.name) <= 16 else task.name[:14] + "…"
+            item_w = DOT + GAP_TEXT + fm.horizontalAdvance(name) + GAP_ITEM
+            if row_w + item_w > legend_w and row_w > 0:
+                n_rows = min(n_rows + 1, 3)
+                row_w = item_w
+            else:
+                row_w += item_w
+
+        # pb = x-axis zone + task rows + gap + line-overlay row + bottom margin
+        ITEM_H = 18
+        pb = 24 + n_rows * ITEM_H + 6 + ITEM_H + 8
+        self._PAD = (pt, pr, pb, pl)   # instance override
+
+        needed_h = pt + self._MIN_PLOT_H + pb
+        self._default_h = needed_h
+        self.setMinimumHeight(needed_h)
+
+        # Tell the parent ResizableChartPanel to resize itself to fit
+        p = self.parentWidget()
+        while p is not None:
+            if hasattr(p, 'fit_to_content'):
+                p.fit_to_content()
+                break
+            p = p.parentWidget()
 
     def _paint(self, p: QPainter) -> None:
         stats  = self._stats
@@ -760,7 +804,17 @@ class WeeklyCompChart(NativeChart):
                       for t in comp.this_week.active_tasks
                                + comp.last_week.active_tasks}
         n = max(len(all_tasks), 1)
-        self.setMinimumHeight(max(160, self._PAD[0] + n * 36 + self._PAD[2] + 10))
+        needed = max(160, self._PAD[0] + n * 36 + self._PAD[2] + 10)
+        self.setMinimumHeight(needed)
+        self._default_h = needed
+
+        # Tell the parent ResizableChartPanel to resize itself to fit
+        p = self.parentWidget()
+        while p is not None:
+            if hasattr(p, 'fit_to_content'):
+                p.fit_to_content()
+                break
+            p = p.parentWidget()
         self.update()
 
     def refresh(self, stats: RangeStats) -> None:

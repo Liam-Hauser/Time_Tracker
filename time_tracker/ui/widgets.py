@@ -461,6 +461,14 @@ def make_resizable_chart_panel(
     title: str, chart_widget: QWidget, default_height: int | None = None
 ) -> ResizableChartPanel:
     """Wrap a chart widget in a ResizableChartPanel."""
+    if default_height is None:
+        # Seed the panel height from the chart's minimum so nothing is clipped
+        # before the first refresh() call.  Overhead: 6 px drag handle + 40 px
+        # header (when a title is provided).
+        overhead = 46 if title else 6
+        chart_min = chart_widget.minimumHeight()
+        if chart_min > 0:
+            default_height = chart_min + overhead
     pan = ResizableChartPanel(title, default_height=default_height)
     pan.add_widget(chart_widget)
     return pan
