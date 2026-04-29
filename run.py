@@ -17,6 +17,16 @@ from PyQt5.QtGui import QIcon, QPainter, QPainterPath, QFontDatabase
 QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
 QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
 
+# PassThrough lets Qt use the real fractional scale factor (e.g. 1.25×, 1.5×)
+# instead of rounding to 1× or 2×, which is the common cause of "everything is
+# the wrong size" on laptops running Windows at 125 % or 150 % display scaling.
+try:
+    QApplication.setHighDpiScaleFactorRoundingPolicy(
+        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+    )
+except AttributeError:
+    pass  # Qt < 5.14 — AA_EnableHighDpiScaling above is still applied
+
 app = QApplication(sys.argv)
 app.setApplicationName("Time Tracker")
 

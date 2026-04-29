@@ -126,7 +126,12 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Time Tracker")
-        self.resize(1600, 960)
+        # Size the window to 88 % of the available screen area, capped at 1600×960
+        _screen = QApplication.primaryScreen().availableGeometry()
+        self.resize(
+            min(1600, int(_screen.width()  * 0.88)),
+            min(960,  int(_screen.height() * 0.88)),
+        )
         _icon_path = Path(__file__).parent.parent / "icon.png"
         if _icon_path.exists():
             from PyQt5.QtGui import QPixmap
@@ -312,7 +317,10 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
         self._splitter = splitter
-        QTimer.singleShot(0, lambda: self._splitter.setSizes([340, self._splitter.width() - 340]))
+        # Sidebar ~20 % of screen width, clamped to 260–380 px
+        _sw = int(QApplication.primaryScreen().availableGeometry().width() * 0.20)
+        _sidebar_w = max(260, min(380, _sw))
+        QTimer.singleShot(0, lambda: self._splitter.setSizes([_sidebar_w, self._splitter.width() - _sidebar_w]))
         root.addWidget(splitter, stretch=1)
 
     # ── Session bar ──────────────────────────────────────
@@ -475,7 +483,7 @@ class MainWindow(QMainWindow):
         nl.setSpacing(2)
 
         self._nav_items: dict[str, QWidget] = {}
-        goals_count = len([t for t in (self._goals or {}).keys()])
+        goals_count = sum(1 for gs in (self._goals or {}).values() if gs.hours > 0 and not gs.archived)
         for view_id, lbl_text, sym, badge in [
             ("overview", "Overview", "▦", None),
             ("calendar", "Calendar", "◫", None),
@@ -511,16 +519,30 @@ class MainWindow(QMainWindow):
         )
         il.addWidget(name_lbl, stretch=1)
 
-        if badge:
-            badge_lbl = QLabel(badge)
-            badge_lbl.setStyleSheet(
-                f"color: {MUTED}; font-size: 10px; font-family: {FONT_MONO};"
-                f" background: transparent; border: none;"
-            )
-            il.addWidget(badge_lbl)
+        badge_lbl = QLabel(badge or "")
+        badge_lbl.setObjectName("NavBadge")
+        badge_lbl.setStyleSheet(
+            f"color: {MUTED}; font-size: 10px; font-family: {FONT_MONO};"
+            f" background: transparent; border: none;"
+        )
+        badge_lbl.setVisible(bool(badge))
+        il.addWidget(badge_lbl)
 
         item.mousePressEvent = lambda e, vid=view_id: self._select_view(vid)
         return item
+
+    def _update_goals_badge(self) -> None:
+        """Refresh the Goals nav badge to reflect active (non-archived) goal count."""
+        count = sum(1 for gs in (self._goals or {}).values() if gs.hours > 0 and not gs.archived)
+        goals_item = self._nav_items.get("goals")
+        if goals_item is None:
+            return
+        from PyQt5.QtWidgets import QLabel as _QLabel
+        for lbl in goals_item.findChildren(_QLabel):
+            if lbl.objectName() == "NavBadge":
+                lbl.setText(str(count) if count else "")
+                lbl.setVisible(count > 0)
+                break
 
     def _update_nav_highlight(self) -> None:
         for view_id, item in self._nav_items.items():
@@ -532,7 +554,12 @@ class MainWindow(QMainWindow):
             )
             # Re-color child labels
             for child in item.findChildren(QLabel):
-                if child.text() in ("▦", "◫", "◎"):
+                if child.objectName() == "NavBadge":
+                    child.setStyleSheet(
+                        f"color: {MUTED}; font-size: 10px; font-family: {FONT_MONO};"
+                        f" background: transparent; border: none;"
+                    )
+                elif child.text() in ("▦", "◫", "◎"):
                     child.setStyleSheet(
                         f"color: {ACCENT if active else MUTED}; font-size: 10px;"
                         f" background: transparent; border: none;"
@@ -806,6 +833,7 @@ class MainWindow(QMainWindow):
         try:
             self._result = result
             self._apply_goals_to_tasks()
+            self._update_goals_badge()
 
             old_count = len(self._all_dates)
             prev_low  = self._date_low
@@ -974,14 +1002,14 @@ class MainWindow(QMainWindow):
             cap = cat_name[:1].upper() + cat_name[1:] if cat_name else cat_name
             cat_lbl = QLabel(cap)
             cat_lbl.setStyleSheet(
-                f"color: {TEXT}; font-size: 14px; font-family: {FONT_UI}; font-weight: 600;"
+                f"color: {TEXT}; font-size: 11px; font-family: {FONT_UI}; font-weight: 600;"
                 f" background: transparent; border: none;"
             )
             cr.addWidget(cat_lbl, stretch=1)
 
             cat_hrs = QLabel(fmt_dur(cat_total_sec, short=True))
             cat_hrs.setStyleSheet(
-                f"color: {MUTED}; font-size: 12px; font-family: {FONT_MONO};"
+                f"color: {MUTED}; font-size: 10px; font-family: {FONT_MONO};"
                 f" background: transparent; border: none;"
             )
             cr.addWidget(cat_hrs)
@@ -1048,7 +1076,7 @@ class MainWindow(QMainWindow):
 
         name_lbl = QLabel(task.name)
         name_lbl.setStyleSheet(
-            f"color: {ACCENT if task.is_clocked_in else TEXT}; font-size: 14px;"
+            f"color: {ACCENT if task.is_clocked_in else TEXT}; font-size: 11px;"
             f" font-family: {FONT_UI}; background: transparent; border: none;"
         )
         il.addWidget(name_lbl, stretch=1)
@@ -1070,7 +1098,7 @@ class MainWindow(QMainWindow):
 
         hrs_lbl = QLabel(fmt_dur(task.total_seconds, short=True))
         hrs_lbl.setStyleSheet(
-            f"color: {MUTED}; font-size: 12px; font-family: {FONT_MONO};"
+            f"color: {MUTED}; font-size: 10px; font-family: {FONT_MONO};"
             f" background: transparent; border: none;"
         )
         il.addWidget(hrs_lbl)
@@ -1281,7 +1309,7 @@ class MainWindow(QMainWindow):
             task = self._result.task_by_name(task_name)
             if task:
                 tab.update_task(task)
-                tab.refresh(start, end)
+                tab.refresh(start, end, self._goals)
             else:
                 self._stack.removeWidget(tab)
                 self._task_views.pop(task_name, None)
@@ -1315,7 +1343,6 @@ class MainWindow(QMainWindow):
 
         self._mc_total.update_value(
             fmt_dur(stats.grand_total_seconds, short=True),
-            f"{stats.grand_total_seconds / 3600:.1f}h total",
         )
 
         n_sess = sum(
@@ -1581,6 +1608,7 @@ class MainWindow(QMainWindow):
             tab.refresh(
                 self._all_dates[self._date_low],
                 self._all_dates[self._date_high],
+                self._goals,
             )
 
     def _sync_combo_to_task(self, task_name: str) -> None:

@@ -17,7 +17,7 @@ from ..core.models import Task, GoalSpec, fmt_dur
 from ..charts.panels import (
     StackedAreaChart, WeekdayBarChart, HourHeatmap, WeeklyCompChart,
     CategoryPieChart,
-    DailyBarChart, SessionHistogramChart, TimeOfDayBarChart, CumulativePaceChart,
+    SessionHistogramChart, TimeOfDayBarChart, CumulativePaceChart,
 )
 from .widgets import (
     MetricCard, InsightStrip, LogbookWidget, export_sessions_to_csv,
@@ -393,7 +393,7 @@ class CategoryTabWidget(QWidget):
         self._insight_strip.refresh(insights)
 
         # Charts
-        self._stacked_chart.refresh(stats)
+        self._stacked_chart.refresh(stats, goals)
         self._wd_chart.refresh(stats)
         self._hm_chart.refresh(stats)
         self._pie_chart.refresh(stats)
@@ -499,7 +499,7 @@ class TaskTabWidget(QWidget):
         lay.addWidget(session_panel)
 
         # ── Daily activity ────────────────────────────────────────────────
-        self._daily_chart = DailyBarChart()
+        self._daily_chart = StackedAreaChart()
         lay.addWidget(make_resizable_chart_panel("Daily activity", self._daily_chart))
 
         # ── Histogram + time-of-day (horizontal splitter) ─────────────────
@@ -536,7 +536,7 @@ class TaskTabWidget(QWidget):
         rows = list(self._session_table._export_rows)
         export_sessions_to_csv(rows, f"{self._task.name}_sessions.csv", self)
 
-    def refresh(self, start: date, end: date) -> None:
+    def refresh(self, start: date, end: date, goals: dict | None = None) -> None:
         import statistics as _stats
         task = self._task
         ts   = TaskSessionStats(task, start, end)
@@ -575,7 +575,7 @@ class TaskTabWidget(QWidget):
         self._session_table.refresh(task, start, end)
 
         # Charts
-        self._daily_chart.refresh_task(ts)
+        self._daily_chart.refresh(RangeStats([task], start, end), goals or {})
         self._histogram.refresh_task(ts)
         self._tod_chart.refresh_task(ts)
         self._pace_chart.refresh_task(ts)

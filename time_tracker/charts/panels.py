@@ -209,8 +209,13 @@ class NativeChart(QWidget):
 
     def _draw_legend(self, p: QPainter, tasks: list[Task],
                      x0: int, y0: int, max_w: int,
-                     font_size: int = 9, max_rows: int = 2) -> None:
-        """Horizontal wrapping legend, capped at max_rows."""
+                     font_size: int = 9, max_rows: int = 3) -> int:
+        """Horizontal wrapping legend, capped at max_rows.
+
+        Returns the total pixel height consumed (rows_drawn × ITEM_H).
+        """
+        if not tasks:
+            return 0
         f = _font(font_size)
         p.setFont(f)
         fm = QFontMetrics(f)
@@ -236,6 +241,7 @@ class NativeChart(QWidget):
             p.drawText(QRectF(x + DOT + GAP_TEXT, y, item_w, ITEM_H),
                        Qt.AlignVCenter, name)
             x += item_w
+        return (row + 1) * ITEM_H
 
 
 # ──────────────────────────────────────────────────────────
@@ -249,12 +255,11 @@ class StackedAreaChart(NativeChart):
     - 7-day rolling average line (dashed, ACCENT colour)
     - Required h/day horizontal reference line (dotted, WARNING colour)
     """
-    _PAD = (20, 16, 80, 56)  # extra bottom padding for 2-row legend
-
-    _PAD = (20, 16, 56, 56)   # extra bottom for legend
+    # bottom = 24 (x-axis) + 3×18 (task legend) + 6 (gap) + 18 (line legend) + 8 (margin)
+    _PAD = (20, 16, 110, 56)
 
     def __init__(self, parent=None):
-        super().__init__(fixed_height=300, parent=parent)
+        super().__init__(fixed_height=340, parent=parent)
         self._goals: dict[str, GoalSpec] = {}
 
     def refresh(self, stats: RangeStats,            # type: ignore[override]
@@ -325,9 +330,10 @@ class StackedAreaChart(NativeChart):
                 p.drawLine(top_pts[i - 1], top_pts[i])
 
         # ── Rolling 7-day average overlay ─────────────────
-        if n >= 2:
+        has_rolling = n >= 2
+        rolling = []
+        if has_rolling:
             window = 7
-            rolling = []
             for i in range(n):
                 chunk = day_totals[max(0, i - window + 1): i + 1]
                 rolling.append(sum(chunk) / len(chunk))
@@ -337,45 +343,86 @@ class StackedAreaChart(NativeChart):
             roll_pts = [QPointF(mx(i), my(v)) for i, v in enumerate(rolling)]
             for i in range(1, len(roll_pts)):
                 p.drawLine(roll_pts[i - 1], roll_pts[i])
-            # Label at end
-            p.setFont(_font(8))
-            p.setPen(QColor(ACCENT))
-            lp = roll_pts[-1]
-            p.drawText(QRectF(lp.x() + 4, lp.y() - 9, 60, 18),
-                       Qt.AlignVCenter, "7d avg")
+
+        # ── Period daily average horizontal line ───────────
+        avg_hpd = sum(day_totals) / len(days) if days else 0.0
+        has_avg = avg_hpd > 0
+        if has_avg:
+            y_avg = my(avg_hpd)
+            if rect.top() <= y_avg <= rect.bottom():
+                avg_pen = QPen(QColor(WARNING), 1, Qt.DotLine)
+                p.setPen(avg_pen)
+                p.drawLine(QPointF(rect.left(), y_avg),
+                           QPointF(rect.right(), y_avg))
 
         # ── Goal pace horizontal line ──────────────────────
         req_hpd = self._compute_required_hpd(stats)
-        if 0 < req_hpd <= max_h * 1.5:
+        has_pace = req_hpd > 0.01
+        if has_pace:
             y_req = my(req_hpd)
             if rect.top() <= y_req <= rect.bottom():
-                pace_pen = QPen(QColor(WARNING), 1, Qt.DotLine)
+                pace_pen = QPen(QColor(SUCCESS), 1, Qt.DotLine)
                 p.setPen(pace_pen)
                 p.drawLine(QPointF(rect.left(), y_req),
                            QPointF(rect.right(), y_req))
-                p.setFont(_font(8))
-                p.setPen(QColor(WARNING))
-                p.drawText(QRectF(rect.right() + 2, y_req - 9, 60, 18),
-                           Qt.AlignVCenter, f"{req_hpd:.1f}h/d")
 
         # Axes labels
         self._draw_y_labels(p, rect, ticks, max_h)
         self._draw_x_date_labels(p, rect, days)
 
-        # Legend below x-axis
+        # Legend below x-axis — task bands, then overlay line entries below
         pt, pr, pb, pl = self._PAD
-        self._draw_legend(p, list(reversed(active)),
-                          pl, self.height() - pb + 24,
-                          self.width() - pl - pr)
+        legend_y = self.height() - pb + 24
+        legend_w = self.width() - pl - pr
+
+        task_legend_h = self._draw_legend(p, list(reversed(active)),
+                                          pl, legend_y, legend_w)
+        line_legend_y = legend_y + task_legend_h + 6
+        self._draw_line_legend(p, pl, line_legend_y, legend_w,
+                               has_rolling, has_avg, has_pace)
+
+    def _draw_line_legend(self, p: QPainter, x0: int, y0: int, max_w: int,
+                          has_rolling: bool, has_avg: bool, has_pace: bool) -> None:
+        """Draw dash/dot line samples + labels for overlay lines, right-aligned."""
+        entries = []
+        if has_rolling:
+            entries.append((ACCENT,   Qt.DashLine, "7d avg"))
+        if has_avg:
+            entries.append((WARNING,  Qt.DotLine,  "daily avg"))
+        if has_pace:
+            entries.append((SUCCESS,  Qt.DotLine,  "goal pace"))
+        if not entries:
+            return
+
+        f = _font(8)
+        p.setFont(f)
+        fm = QFontMetrics(f)
+        LINE_W, GAP_TEXT, GAP_ITEM, ITEM_H = 16, 4, 12, 18
+
+        # Measure total width to right-align the block
+        total = sum(LINE_W + GAP_TEXT + fm.horizontalAdvance(lbl) + GAP_ITEM
+                    for _, _, lbl in entries) - GAP_ITEM
+        x = x0 + max_w - total
+
+        for colour, style, lbl in entries:
+            pen = QPen(QColor(colour), 1.5, style)
+            p.setPen(pen)
+            mid_y = y0 + ITEM_H / 2
+            p.drawLine(QPointF(x, mid_y), QPointF(x + LINE_W, mid_y))
+            p.setPen(QColor(colour))
+            p.drawText(QRectF(x + LINE_W + GAP_TEXT, y0,
+                              fm.horizontalAdvance(lbl) + 4, ITEM_H),
+                       Qt.AlignVCenter, lbl)
+            x += LINE_W + GAP_TEXT + fm.horizontalAdvance(lbl) + GAP_ITEM
 
     def _compute_required_hpd(self, stats: RangeStats) -> float:
-        """Sum of (remaining hours / days to deadline) across all active goals."""
+        """Sum of (remaining hours / days to deadline) across all active non-archived goals."""
         from datetime import date as _date
         today = _date.today()
         total_req = 0.0
         for task in stats.tasks:
             gs = self._goals.get(task.name)
-            if gs and gs.hours > 0:
+            if gs and gs.hours > 0 and not gs.archived:
                 remaining = max(0.0, gs.hours - task.total_hours)
                 if remaining <= 0:
                     continue
