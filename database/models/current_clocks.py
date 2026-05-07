@@ -5,6 +5,6 @@ class CurrentClock(Base):
     __tablename__ = "current_clocks"
 
     id = Column(Integer, primary_key=True)
-    task_id = Column(Integer, ForeignKey("tasks.id"))
+    task_id = Column(Integer, ForeignKey("tasks.id", ondelete="CASCADE"))
     start_time = Column(DateTime)
     note = Column(Text, nullable=True)

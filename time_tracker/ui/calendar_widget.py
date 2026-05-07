@@ -34,6 +34,7 @@ from PyQt5.QtWidgets import (
 from ..core.models import Task, Session, fmt_dur
 from ..core.parser import ParseResult
 from ..core.db_store import DBStore
+from ..core.analytics import monday_of
 from .theme import (
     BG, BG2, BG3, BG4, BORDER, BORDER2,
     TEXT, MUTED, FAINT, ACCENT,
@@ -160,8 +161,7 @@ class ContributionGraph(QWidget):
         self.update()
 
     def _grid_start(self) -> date:
-        today = date.today()
-        return (today - timedelta(days=today.weekday())) - timedelta(weeks=52)
+        return monday_of(date.today()) - timedelta(weeks=52)
 
     def _cell_rect(self, w: int, dow: int) -> QRect:
         step = self._dyn_step()
@@ -505,11 +505,10 @@ class WeekGridWidget(QGraphicsView):
 
     @staticmethod
     def _this_monday() -> date:
-        today = date.today()
-        return today - timedelta(days=today.weekday())
+        return monday_of(date.today())
 
     def set_week(self, monday: date) -> None:
-        self._monday = monday - timedelta(days=monday.weekday())
+        self._monday = monday_of(monday)
         self._rebuild()
 
     def refresh(self, tasks: list[Task]) -> None:
@@ -846,7 +845,7 @@ class CalendarWidget(QWidget):
         self._grid.scroll_to_hour(datetime.now().hour)
 
     def _on_contrib_click(self, d: date) -> None:
-        self._monday = d - timedelta(days=d.weekday())
+        self._monday = monday_of(d)
         self._grid.set_week(self._monday)
         self._update_week_label()
 

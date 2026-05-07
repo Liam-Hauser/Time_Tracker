@@ -144,7 +144,7 @@ class DBStore:
 
     def rename_task(self, task_id: int, new_name: str) -> None:
         from database.db import SessionLocal
-        from database.models import Task as DBTask, Goal as DBGoal
+        from database.models import Task as DBTask
 
         with self._lock:
             with SessionLocal() as db:
@@ -152,8 +152,6 @@ class DBStore:
                     raise ValueError(f"A task named '{new_name}' already exists")
                 task = self._get_task(db, task_id)
                 task.name = new_name
-                for goal in db.query(DBGoal).filter_by(tasks_id=task_id).all():
-                    goal.name = new_name
                 db.commit()
 
     def move_task(self, task_id: int, new_category: str) -> None:

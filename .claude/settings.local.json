@@ -12,7 +12,8 @@
       "Bash(curl -L -o \"Geist-Medium.ttf\" \"https://github.com/vercel/geist-font/raw/main/packages/font-files/Geist/Geist-Medium.ttf\")",
       "Bash(curl -L -o \"Geist-SemiBold.ttf\" \"https://github.com/vercel/geist-font/raw/main/packages/font-files/Geist/Geist-SemiBold.ttf\")",
       "Bash(curl -L -o \"GeistMono-Regular.ttf\" \"https://github.com/vercel/geist-font/raw/main/packages/font-files/GeistMono/GeistMono-Regular.ttf\")",
-      "Bash(curl -L -o \"GeistMono-Medium.ttf\" \"https://github.com/vercel/geist-font/raw/main/packages/font-files/GeistMono/GeistMono-Medium.ttf\")"
+      "Bash(curl -L -o \"GeistMono-Medium.ttf\" \"https://github.com/vercel/geist-font/raw/main/packages/font-files/GeistMono/GeistMono-Medium.ttf\")",
+      "Bash(grep -n \"def.*:$\" time_tracker/ui/main_window.py)"
     ]
   },
   "enabledPlugins": {

@@ -88,6 +88,47 @@ def card_frame(parent=None) -> QFrame:
 # Panel widget  (titled container for charts / content)
 # ──────────────────────────────────────────────────────────
 
+class ProgressBar(QWidget):
+    """Filled rectangle with centred text; QPainter-based.
+
+    Used for goal progress (height ≈ 20–22, alpha ≈ 0.65–0.72).
+    """
+
+    def __init__(self, color: str, height: int = 20, alpha: float = 0.72,
+                 parent=None):
+        super().__init__(parent)
+        self._pct = 0.0
+        self._color = color
+        self._text = ""
+        self._alpha = alpha
+        self.setFixedHeight(height)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+    def set(self, pct: float, text: str, color: str) -> None:
+        self._pct = min(1.0, max(0.0, pct))
+        self._text = text
+        self._color = color
+        self.update()
+
+    def paintEvent(self, _event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        w, h = self.width(), self.height()
+        p.fillRect(0, 0, w, h, QColor(BG3))
+        fill_w = int(self._pct * w)
+        color = QColor(self._color)
+        color.setAlphaF(self._alpha)
+        p.fillRect(0, 0, fill_w, h, color)
+        p.setPen(QPen(QColor(BORDER), 1))
+        p.drawRect(0, 0, w - 1, h - 1)
+        p.setPen(QColor(TEXT))
+        font = QFont(FONT_MONO, 8)
+        font.setWeight(QFont.DemiBold)
+        p.setFont(font)
+        p.drawText(0, 0, w, h, Qt.AlignCenter, self._text)
+        p.end()
+
+
 class PanelWidget(QFrame):
     """Card-style container with a thin header bar and content body."""
 

@@ -13,7 +13,9 @@ from PyQt5.QtWidgets import (
     QScrollArea, QFrame, QSizePolicy, QGridLayout,
 )
 
+from ..core.analytics import ewma_daily_hours
 from ..core.models import Task, GoalSpec
+from .widgets import ProgressBar
 from .theme import (
     BG, BG2, BG3, BORDER, BORDER2,
     TEXT, DIM, MUTED, FAINT, ACCENT, SUCCESS, WARNING, DANGER,
@@ -27,11 +29,7 @@ from .theme import (
 def _lbl(text: str, color: str = TEXT, size: int = 10,
          bold: bool = False, mono: bool = False) -> QLabel:
     w = QLabel(text)
-    w.setStyleSheet(
-        f"color: {color}; font-size: {size}px; font-weight: {'600' if bold else '400'};"
-        f" background: transparent; border: none;"
-        + (f" font-family: {FONT_MONO};" if mono else "")
-    )
+    w.setStyleSheet(SS.label(color, size, bold, mono))
     return w
 
 
@@ -65,42 +63,6 @@ class _Sparkline(QWidget):
             y = h - bar_h - 2
             color.setAlphaF(0.85)
             p.fillRect(x, y, bar_w, bar_h, color)
-        p.end()
-
-
-# ── progress bar ─────────────────────────────────────────────────────────────
-
-class _ProgressBar(QWidget):
-    def __init__(self, color: str, parent=None):
-        super().__init__(parent)
-        self._pct = 0.0
-        self._color = color
-        self._text = ""
-        self.setFixedHeight(20)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-
-    def set(self, pct: float, text: str, color: str) -> None:
-        self._pct = min(1.0, max(0.0, pct))
-        self._text = text
-        self._color = color
-        self.update()
-
-    def paintEvent(self, _event) -> None:
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        w, h = self.width(), self.height()
-        p.fillRect(0, 0, w, h, QColor(BG3))
-        fill_w = int(self._pct * w)
-        color = QColor(self._color)
-        color.setAlphaF(0.72)
-        p.fillRect(0, 0, fill_w, h, color)
-        p.setPen(QPen(QColor(BORDER), 1))
-        p.drawRect(0, 0, w - 1, h - 1)
-        p.setPen(QColor(TEXT))
-        font = QFont(FONT_MONO, 8)
-        font.setWeight(QFont.DemiBold)
-        p.setFont(font)
-        p.drawText(0, 0, w, h, Qt.AlignCenter, self._text)
         p.end()
 
 
@@ -176,7 +138,7 @@ class _GoalCard(QWidget):
         outer.addLayout(top)
 
         # ── progress bar ─────────────────────────────────────
-        self._bar = _ProgressBar(task.colour)
+        self._bar = ProgressBar(task.colour, height=20, alpha=0.72)
         outer.addWidget(self._bar)
 
         # ── stats row ────────────────────────────────────────
@@ -280,7 +242,11 @@ class _GoalCard(QWidget):
             status, s_color = "DONE", SUCCESS
         elif gs.archived:
             status, s_color = "ARCHIVED", MUTED
+        elif dl_days is not None and dl_days <= 0:
+            # Deadline passed but goal not met
+            status, s_color = "OVERDUE", DANGER
         elif req_hpd is None:
+            # No deadline set
             on_track = daily_avg > 0
             status, s_color = ("ON TRACK", SUCCESS) if on_track else ("IN PROGRESS", MUTED)
         else:
@@ -312,26 +278,17 @@ class _GoalCard(QWidget):
             self._dl_date.setText(gs.completed_on.strftime("%Y-%m-%d"))
             days_since = (date.today() - gs.completed_on).days
             self._dl_days.setText(f"{days_since}d ago")
-            self._dl_days.setStyleSheet(
-                f"color: {SUCCESS}; font-size: 9px; font-family: {FONT_MONO};"
-                f" background: transparent; border: none;"
-            )
+            self._dl_days.setStyleSheet(SS.label(SUCCESS, 9, mono=True))
         elif task.goal_deadline:
             self._dl_label.setText("DEADLINE")
             self._dl_date.setText(task.goal_deadline.strftime("%Y-%m-%d"))
             if dl_days is not None:
                 dl_color = DANGER if dl_days < 5 else MUTED
                 self._dl_days.setText(f"{dl_days}d left")
-                self._dl_days.setStyleSheet(
-                    f"color: {dl_color}; font-size: 9px; font-family: {FONT_MONO};"
-                    f" background: transparent; border: none;"
-                )
+                self._dl_days.setStyleSheet(SS.label(dl_color, 9, mono=True))
             else:
                 self._dl_days.setText("deadline passed")
-                self._dl_days.setStyleSheet(
-                    f"color: {DANGER}; font-size: 9px; font-family: {FONT_MONO};"
-                    f" background: transparent; border: none;"
-                )
+                self._dl_days.setStyleSheet(SS.label(DANGER, 9, mono=True))
         else:
             self._dl_label.setText("DEADLINE")
             self._dl_date.setText("no deadline")
@@ -341,32 +298,17 @@ class _GoalCard(QWidget):
         if req_hpd is not None:
             pace_color = SUCCESS if daily_avg >= req_hpd else WARNING
             self._pace_val.setText(f"{req_hpd:.1f} h/day")
-            self._pace_val.setStyleSheet(
-                f"color: {pace_color}; font-size: 10px; font-family: {FONT_MONO};"
-                f" background: transparent; border: none;"
-            )
-            self._pace_avg.setText(f"avg7 {daily_avg:.1f}h")
+            self._pace_val.setStyleSheet(SS.label(pace_color, 10, mono=True))
         elif pct >= 1.0:
             self._pace_val.setText("complete")
-            self._pace_val.setStyleSheet(
-                f"color: {SUCCESS}; font-size: 10px; font-family: {FONT_MONO};"
-                f" background: transparent; border: none;"
-            )
-            self._pace_avg.setText(f"avg7 {daily_avg:.1f}h")
+            self._pace_val.setStyleSheet(SS.label(SUCCESS, 10, mono=True))
         elif dl_days is not None and dl_days <= 0:
             self._pace_val.setText("overdue")
-            self._pace_val.setStyleSheet(
-                f"color: {DANGER}; font-size: 10px; font-family: {FONT_MONO};"
-                f" background: transparent; border: none;"
-            )
-            self._pace_avg.setText(f"avg7 {daily_avg:.1f}h")
+            self._pace_val.setStyleSheet(SS.label(DANGER, 10, mono=True))
         else:
             self._pace_val.setText("no deadline")
-            self._pace_val.setStyleSheet(
-                f"color: {MUTED}; font-size: 10px; font-family: {FONT_MONO};"
-                f" background: transparent; border: none;"
-            )
-            self._pace_avg.setText(f"avg7 {daily_avg:.1f}h")
+            self._pace_val.setStyleSheet(SS.label(MUTED, 10, mono=True))
+        self._pace_avg.setText(f"recent {daily_avg:.1f}h/d")
 
         # archive button label
         self._archive_btn.setText("Unarchive" if gs.archived else "Archive")
@@ -598,7 +540,7 @@ class GoalsTab(QWidget):
         # Build / refresh cards
         for task in display_tasks:
             gs = goals.get(task.name, GoalSpec())
-            daily_avg = _avg7_hours(task)
+            daily_avg = _recent_daily_hours(task)
             if task.name not in self._cards:
                 card = _GoalCard(task)
                 card.clicked.connect(self.task_clicked)
@@ -627,15 +569,8 @@ def _is_on_track(task: Task) -> bool:
     req = task.required_daily_hours()
     if req is None:
         return True
-    return _avg7_hours(task) >= req
+    return _recent_daily_hours(task) >= req
 
 
-def _avg7_hours(task: Task) -> float:
-    today = date.today()
-    seven_ago = today - timedelta(days=6)
-    total_h = task.hours_in_range(seven_ago, today)
-    active_days = len({
-        s.date for s in task.sessions
-        if seven_ago <= s.date <= today and not s.is_open
-    })
-    return total_h / active_days if active_days else 0.0
+def _recent_daily_hours(task: Task) -> float:
+    return ewma_daily_hours(task)

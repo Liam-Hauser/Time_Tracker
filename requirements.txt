@@ -2,3 +2,6 @@ PyQt5~=5.15.11
 python-qt5~=0.1.10
 SQLAlchemy~=2.0.48
 alembic~=1.18.4
+
+# dev
+pytest~=8.3

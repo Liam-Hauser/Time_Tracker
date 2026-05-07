@@ -25,10 +25,14 @@ def date_range(start: date, end: date) -> list[date]:
     return days
 
 
+def monday_of(d: date) -> date:
+    """Monday of the ISO week containing *d* (Monday-based weeks)."""
+    return d - timedelta(days=d.weekday())
+
+
 def this_week_range() -> tuple[date, date]:
     today = date.today()
-    monday = today - timedelta(days=today.weekday())
-    return monday, today
+    return monday_of(today), today
 
 
 def last_week_range() -> tuple[date, date]:
@@ -52,6 +56,45 @@ def last_month_range() -> tuple[date, date]:
 def last_n_days(n: int) -> tuple[date, date]:
     today = date.today()
     return today - timedelta(days=n - 1), today
+
+
+def ewma_daily_hours(
+    task: Task,
+    halflife_days: float = 7.0,
+    lookback_days: int = 35,
+) -> float:
+    """Exponentially weighted daily-hours pace for *task*.
+
+    Recent days dominate (a session today counts twice as much as one
+    `halflife_days` ago); older days fade out. Days with zero activity
+    are included with full weight, so the result is hours-per-calendar-day,
+    not hours-per-active-day. Used as the pace input for goal status
+    (`pace >= required_per_day` ⇔ projected total at deadline ≥ goal).
+
+    Currently-open sessions are excluded so the badge and "recent" pace
+    don't shift while clocked in. Live progress is still reflected in
+    `Task.total_hours` (used by the progress bar).
+    """
+    today = date.today()
+    decay = 0.5 ** (1.0 / halflife_days)
+
+    daily: dict[date, float] = {}
+    start = today - timedelta(days=lookback_days - 1)
+    for s in task.sessions:
+        if s.is_open:
+            continue
+        d = s.date
+        if start <= d <= today:
+            daily[d] = daily.get(d, 0.0) + s.duration_seconds / 3600
+
+    weighted_sum = 0.0
+    weight_sum = 0.0
+    for i in range(lookback_days):
+        d = today - timedelta(days=i)
+        w = decay ** i
+        weighted_sum += daily.get(d, 0.0) * w
+        weight_sum += w
+    return weighted_sum / weight_sum if weight_sum else 0.0
 
 
 # ──────────────────────────────────────────────────────────
@@ -101,11 +144,13 @@ class RangeStats:
         # Each session is distributed across every clock-hour it spans so a
         # 2-hour session from 09:30–11:30 contributes 30 min to h=9, 60 to
         # h=10, and 30 to h=11 rather than dumping everything into h=9.
+        # Open sessions contribute their live elapsed time up to "now".
         self.by_hour: dict[int, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+        now = datetime.now()
         for t in tasks:
             for s in t.sessions_in_range(start, end):
                 s_start = s.start
-                s_end   = s.end if s.end else s.start  # open sessions: treat as zero-dur
+                s_end   = s.end if s.end else now
                 if s_end <= s_start:
                     continue
                 cur = s_start
@@ -168,44 +213,6 @@ class WeeklyComparison:
     def total_delta(self) -> float:
         return (self.this_week.grand_total_seconds
                 - self.last_week.grand_total_seconds)
-
-
-# ──────────────────────────────────────────────────────────
-# Goal tracking
-# ──────────────────────────────────────────────────────────
-class GoalTracker:
-    def __init__(self, tasks: list[Task], stats: RangeStats):
-        self.tasks = tasks
-        self.stats = stats
-
-    def daily_avg_hours(self, task_name: str) -> float:
-        t = next((t for t in self.tasks if t.name == task_name), None)
-        if not t:
-            return 0.0
-        active_days = {s.date for s in t.sessions if not s.is_open}
-        if not active_days:
-            return 0.0
-        return t.total_hours / len(active_days)
-
-    def eta_days(self, task_name: str) -> Optional[float]:
-        t = next((t for t in self.tasks if t.name == task_name), None)
-        if not t or t.goal_hours <= 0:
-            return None
-        daily_avg = self.daily_avg_hours(task_name)
-        return t.days_to_goal(daily_avg)
-
-    def required_daily_hours(self, task_name: str) -> Optional[float]:
-        t = next((t for t in self.tasks if t.name == task_name), None)
-        if t is None:
-            return None
-        return t.required_daily_hours()
-
-    def is_on_pace(self, task_name: str) -> Optional[bool]:
-        req = self.required_daily_hours(task_name)
-        if req is None:
-            return None
-        avg = self.daily_avg_hours(task_name)
-        return avg >= req
 
 
 # ──────────────────────────────────────────────────────────

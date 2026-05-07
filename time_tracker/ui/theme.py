@@ -340,6 +340,17 @@ class SS:
         )
 
     @staticmethod
+    def label(color: str = TEXT, size: int = 10,
+              bold: bool = False, mono: bool = False) -> str:
+        """Stylesheet for a transparent, no-border QLabel."""
+        weight = "600" if bold else "400"
+        family = f" font-family: {FONT_MONO};" if mono else ""
+        return (
+            f"color: {color}; font-size: {size}px; font-weight: {weight};"
+            f" background: transparent; border: none;{family}"
+        )
+
+    @staticmethod
     def section_label() -> str:
         return (
             f"QLabel {{"

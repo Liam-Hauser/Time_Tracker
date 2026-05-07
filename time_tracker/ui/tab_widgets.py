@@ -2,16 +2,19 @@
 ui/tab_widgets.py — Per-category and per-task tab content widgets.
 """
 from __future__ import annotations
-from datetime import date, datetime
+import statistics as _stats
+from datetime import date, datetime, timedelta
 from typing import Optional
 
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
+from PyQt5.QtGui import QPainter, QColor, QFont
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QScrollArea, QPushButton, QSplitter,
 )
 
 from ..core.analytics import (
     RangeStats, WeeklyComparison, TaskSessionStats, category_insights,
+    ewma_daily_hours,
 )
 from ..core.models import Task, GoalSpec, fmt_dur
 from ..charts.panels import (
@@ -22,7 +25,7 @@ from ..charts.panels import (
 from .widgets import (
     MetricCard, InsightStrip, LogbookWidget, export_sessions_to_csv,
     ChartPanel, make_chart_panel, make_resizable_chart_panel, ResizableChartPanel,
-    label, h_line,
+    ProgressBar, label, h_line,
 )
 from .theme import (
     BG, BG2, BG3, BORDER, BORDER2, TEXT, DIM, MUTED, FAINT,
@@ -30,11 +33,6 @@ from .theme import (
     ACCENT, SUCCESS, WARNING, DANGER,
     FONT_UI, FONT_MONO, SS,
 )
-
-
-from PyQt5.QtGui import QPainter, QColor, QFont
-from PyQt5.QtCore import QTimer
-from datetime import timedelta
 
 
 def _today_seconds(tasks: list[Task]) -> float:
@@ -51,41 +49,6 @@ def _today_seconds(tasks: list[Task]) -> float:
 # ──────────────────────────────────────────────────────────
 # Goal info panel (used inside Task tab)
 # ──────────────────────────────────────────────────────────
-
-class _GoalProgressBar(QWidget):
-    def __init__(self, color: str, parent=None):
-        super().__init__(parent)
-        self._pct = 0.0
-        self._color = color
-        self._text = ""
-        self.setFixedHeight(22)
-
-    def set(self, pct: float, text: str, color: str) -> None:
-        self._pct = min(1.0, max(0.0, pct))
-        self._text = text
-        self._color = color
-        self.update()
-
-    def paintEvent(self, _e):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        w, h = self.width(), self.height()
-        p.fillRect(0, 0, w, h, QColor(BG3))
-        fill_w = int(self._pct * w)
-        c = QColor(self._color)
-        c.setAlphaF(0.65)
-        p.fillRect(0, 0, fill_w, h, c)
-        from PyQt5.QtGui import QPen
-        p.setPen(QPen(QColor(BORDER), 1))
-        p.drawRect(0, 0, w - 1, h - 1)
-        p.setPen(QColor(TEXT))
-        f = QFont(FONT_MONO, 8)
-        f.setWeight(QFont.DemiBold)
-        p.setFont(f)
-        from PyQt5.QtCore import Qt as _Qt
-        p.drawText(0, 0, w, h, _Qt.AlignCenter, self._text)
-        p.end()
-
 
 class GoalInfoPanel(QWidget):
     """Compact goal summary shown in the task tab when a goal is active."""
@@ -136,7 +99,7 @@ class GoalInfoPanel(QWidget):
 
         # progress bar
         self._bar_color = "#5B8DEF"
-        self._bar = _GoalProgressBar(self._bar_color)
+        self._bar = ProgressBar(self._bar_color, height=22, alpha=0.65)
         lay.addWidget(self._bar)
 
         # stats row
@@ -147,7 +110,7 @@ class GoalInfoPanel(QWidget):
         self._lbl_target   = self._stat_col(stats, "TARGET")
         self._lbl_deadline = self._stat_col(stats, "DEADLINE")
         self._lbl_pace     = self._stat_col(stats, "PACE NEEDED")
-        self._lbl_avg      = self._stat_col(stats, "AVG 7D")
+        self._lbl_avg      = self._stat_col(stats, "RECENT")
         stats.addStretch()
         lay.addLayout(stats)
 
@@ -179,19 +142,14 @@ class GoalInfoPanel(QWidget):
         req_hpd  = task.required_daily_hours()
         dl_days  = task.deadline_days_left()
 
-        # avg 7-day
-        today = date.today()
-        seven_ago = today - timedelta(days=6)
-        total_7 = task.hours_in_range(seven_ago, today)
-        active_days_7 = len({
-            s.date for s in task.sessions
-            if seven_ago <= s.date <= today and not s.is_open
-        })
-        avg7 = total_7 / active_days_7 if active_days_7 else 0.0
+        # recent daily pace (EWMA, 7-day half-life)
+        avg7 = ewma_daily_hours(task)
 
         # status badge
         if pct >= 1.0:
             status, s_color = "DONE", SUCCESS
+        elif dl_days is not None and dl_days <= 0:
+            status, s_color = "OVERDUE", DANGER
         elif req_hpd is None:
             status, s_color = "IN PROGRESS", MUTED
         elif avg7 >= req_hpd:
@@ -224,22 +182,13 @@ class GoalInfoPanel(QWidget):
         if req_hpd is not None:
             pace_color = SUCCESS if avg7 >= req_hpd else WARNING
             self._lbl_pace.setText(f"{req_hpd:.2f} h/day")
-            self._lbl_pace.setStyleSheet(
-                f"color: {pace_color}; font-size: 10px; font-family: {FONT_MONO};"
-                f" background: transparent; border: none;"
-            )
+            self._lbl_pace.setStyleSheet(SS.label(pace_color, 10, mono=True))
         elif pct >= 1.0:
             self._lbl_pace.setText("complete")
-            self._lbl_pace.setStyleSheet(
-                f"color: {SUCCESS}; font-size: 10px; font-family: {FONT_MONO};"
-                f" background: transparent; border: none;"
-            )
+            self._lbl_pace.setStyleSheet(SS.label(SUCCESS, 10, mono=True))
         else:
             self._lbl_pace.setText("—")
-            self._lbl_pace.setStyleSheet(
-                f"color: {MUTED}; font-size: 10px; font-family: {FONT_MONO};"
-                f" background: transparent; border: none;"
-            )
+            self._lbl_pace.setStyleSheet(SS.label(MUTED, 10, mono=True))
 
         self._lbl_avg.setText(f"{avg7:.2f} h/day")
 
@@ -358,9 +307,7 @@ class CategoryTabWidget(QWidget):
         self._end       = end
         stats = RangeStats(cat_tasks, start, end)
 
-        import statistics as _stats
-        from datetime import date as _date
-        today = _date.today()
+        today = date.today()
 
         today_sec = _today_seconds(cat_tasks)
         today_sess = sum(1 for t in cat_tasks for s in t.sessions if s.start.date() == today)
@@ -537,7 +484,6 @@ class TaskTabWidget(QWidget):
         export_sessions_to_csv(rows, f"{self._task.name}_sessions.csv", self)
 
     def refresh(self, start: date, end: date, goals: dict | None = None) -> None:
-        import statistics as _stats
         task = self._task
         ts   = TaskSessionStats(task, start, end)
 

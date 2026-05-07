@@ -5,7 +5,7 @@ class Goal(Base):
     __tablename__ = "goals"
 
     id = Column(Integer, primary_key=True)
-    tasks_id = Column(Integer, ForeignKey("tasks.id"))
+    tasks_id = Column(Integer, ForeignKey("tasks.id", ondelete="CASCADE"))
     name = Column(String)
     target_hours = Column(Integer)
     by_date = Column(DateTime)

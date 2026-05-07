@@ -3,9 +3,12 @@ ui/main_window.py — Top-level application window.
 """
 
 from __future__ import annotations
+import logging
 import traceback
 from datetime import date, datetime
 from typing import Optional
+
+log = logging.getLogger(__name__)
 
 from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QObject, QDate
 from PyQt5.QtWidgets import (
@@ -20,7 +23,7 @@ from pathlib import Path
 
 from ..core import (
     DBStore, ParseResult, RangeStats,
-    WeeklyComparison, GoalTracker, InsightEngine, Insight, streak_days,
+    WeeklyComparison, InsightEngine, Insight, streak_days,
     GoalSpec,
     date_range, this_week_range, last_week_range,
     this_month_range, last_month_range, last_n_days,
@@ -97,8 +100,8 @@ class UpdateChecker(QObject):
             latest = data.get("tag_name", "").lstrip("v")
             if latest and latest != VERSION:
                 self.update_available.emit(latest)
-        except Exception:
-            pass  # silently ignore — no internet, rate limit, etc.
+        except Exception as e:
+            log.debug("update check failed: %s", e)
 
 
 # ──────────────────────────────────────────────────────────
@@ -896,6 +899,9 @@ class MainWindow(QMainWindow):
     def _apply_goals_to_tasks(self) -> None:
         if not self._result:
             return
+        live_names = {t.name for t in self._result.tasks}
+        if any(k not in live_names for k in self._goals):
+            self._goals = {k: v for k, v in self._goals.items() if k in live_names}
         goals_changed = False
         for t in self._result.tasks:
             gs = self._goals.get(t.name, GoalSpec())
@@ -1557,6 +1563,13 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.warning(self, "Failed to rename category", str(e))
             return
+        # Drop the old cached category view so the rename takes effect.
+        if old_name in self._category_views:
+            tab = self._category_views.pop(old_name)
+            self._stack.removeWidget(tab)
+            tab.deleteLater()
+            if self._current_view == f"cat:{old_name}":
+                self._select_view("overview")
         self._categories = self._store.load_categories()
         self._trigger_reload()
 
@@ -1636,6 +1649,14 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.warning(self, "Rename failed", str(e))
             return
+        # Drop the old cached view so the next click on the renamed task
+        # rebuilds it fresh against the new name.
+        if task_name in self._task_views:
+            tab = self._task_views.pop(task_name)
+            self._stack.removeWidget(tab)
+            tab.deleteLater()
+            if self._current_view == f"task:{task_name}":
+                self._select_view("overview")
         self._trigger_reload()
 
     def _on_move_task(self, task_name: str) -> None:

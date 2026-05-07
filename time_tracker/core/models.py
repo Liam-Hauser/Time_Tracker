@@ -118,6 +118,10 @@ class Session:
 
     @property
     def duration(self) -> timedelta:
+        # Open sessions return live elapsed time. Aggregations that care about
+        # stability (e.g. ewma_daily_hours, goal pace) explicitly skip open
+        # sessions; aggregations that should reflect live progress (the session
+        # bar, today's chart bucket, Task.total_hours/goal_progress) include it.
         if self.is_open:
             return datetime.now() - self.start
         return self.end - self.start  # type: ignore[operator]
@@ -151,18 +155,6 @@ class GoalSpec:
         if self.hours <= 0:
             return 0.0
         return min(1.0, task.total_hours / self.hours)
-
-    def is_on_track(self, task: "Task") -> bool:
-        """True if current pace would meet the deadline."""
-        if not self.deadline or self.hours <= 0:
-            return True
-        days_elapsed = max(1, (date.today() - task.sessions[0].date).days) if task.sessions else 1
-        daily_actual = task.total_hours / days_elapsed
-        days_left = (self.deadline - date.today()).days
-        if days_left <= 0:
-            return task.total_hours >= self.hours
-        required = max(0.0, self.hours - task.total_hours) / days_left
-        return daily_actual >= required * 0.9
 
     def days_remaining(self) -> Optional[int]:
         if not self.deadline:
